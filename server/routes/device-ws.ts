@@ -28,6 +28,8 @@ export default defineWebSocketHandler({
           publishTelemetry: publishTelemetryOnReceipt,
           storeTelemetry: (device, payload, receivedAtMs) =>
             processTelemetry(device, payload, { publish: false, receivedAtMs }),
+          analyzeTelemetry: (device, payload, receivedAtMs) =>
+            processTelemetry(device, payload, { publish: false, receivedAtMs, storeRaw: false }),
           handleHeartbeat: (device, body) => processHeartbeat(device, body),
         },
       ),

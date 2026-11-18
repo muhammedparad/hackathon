@@ -1,23 +1,11 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  Activity,
-  Bed,
-  Box,
-  Crosshair,
-  Flame,
-  Grid2x2,
-  Maximize2,
-  Minimize2,
-  Pause,
-  Play,
-  Settings,
-  User,
-  UserRound,
-} from "lucide-react";
-import { Radar3D, type Radar3DProps } from "@/components/radar/radar-3d";
+import { Activity, Bed, Crosshair, Pause, Play, Settings, User, UserRound } from "lucide-react";
+import type { Radar3DProps } from "@/components/radar/radar-3d";
+import { RadarStage } from "@/components/radar/radar-stage";
+import { DemoVitalsCard } from "@/components/radar/demo-vitals-card";
 import { AreaSeries } from "@/components/app/charts";
-import type { RadarView } from "@/lib/radar/iso";
+import { targetColor, targetLabel } from "@/lib/radar/palette";
 import type { LD2450Target } from "@/lib/radar/types";
 import { cn } from "@/lib/utils";
 
@@ -39,10 +27,11 @@ export interface LiveRadarViewProps {
   points: Radar3DProps["points"];
   hub: Radar3DProps["hub"];
   stale: boolean;
+  /** Current time (ms), ticking, for the still-for-10-s timer */
+  now: number;
   lastUpdateLabel: string;
   series: SignalSample[];
-  /** The 2D top-down view and the stored-trajectory heatmap are rendered by the page. */
-  topView: ReactNode;
+  /** The stored-trajectory heatmap is rendered by the page. */
   heatmap: ReactNode;
   frozen: boolean;
   onToggleFrozen: () => void;
@@ -63,123 +52,19 @@ const PILL: Record<LiveRoomStatus, { label: string; cls: string; dot: string }> 
   unknown: { label: "No data yet", cls: "bg-slate-100 text-slate-500", dot: "bg-slate-300" },
 };
 
-type Tab = "3d" | "2d" | "heatmap";
-const TABS: Array<{ id: Tab; label: string; icon: typeof Box }> = [
-  { id: "3d", label: "3D Radar", icon: Box },
-  { id: "2d", label: "2D Top View", icon: Grid2x2 },
-  { id: "heatmap", label: "Heatmap", icon: Flame },
-];
-const VIEWS: Array<{ id: RadarView; label: string }> = [
-  { id: "perspective", label: "Perspective" },
-  { id: "top", label: "Top" },
-  { id: "front", label: "Front" },
-  { id: "right", label: "Right" },
-];
 const SERIES: Array<{ id: "targets" | "nearest" | "speed"; label: string; unit?: string }> = [
   { id: "targets", label: "People detected" },
   { id: "nearest", label: "Nearest target", unit: " m" },
   { id: "speed", label: "Fastest speed", unit: " m/s" },
 ];
 
-function Chip({
-  active,
-  disabled,
-  onClick,
-  children,
-  title,
-}: {
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      aria-pressed={active}
-      className={cn(
-        "inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl border px-3.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40",
-        active
-          ? "border-blue-600 bg-blue-600 text-white shadow-sm"
-          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Toggle({
-  checked,
-  disabled,
-  onChange,
-  label,
-  title,
-}: {
-  checked: boolean;
-  disabled?: boolean | undefined;
-  onChange: (v: boolean) => void;
-  label: string;
-  title?: string | undefined;
-}) {
-  return (
-    <label
-      title={title}
-      className={cn(
-        "inline-flex min-h-9 shrink-0 cursor-pointer items-center gap-2 text-sm text-slate-700",
-        disabled && "cursor-not-allowed opacity-40",
-      )}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="size-4 rounded border-slate-300 accent-blue-600"
-      />
-      {label}
-    </label>
-  );
-}
-
 export function LiveRadarView(p: LiveRadarViewProps) {
-  const [tab, setTab] = useState<Tab>("3d");
-  const [view, setView] = useState<RadarView>("perspective");
-  const [show, setShow] = useState({
-    targets: true,
-    grid: true,
-    pointCloud: false,
-    trajectory: false,
-  });
   const [metric, setMetric] = useState<(typeof SERIES)[number]["id"]>("targets");
-  const [isFull, setIsFull] = useState(false);
-  const stageRef = useRef<HTMLDivElement>(null);
-
-  const toggleFull = async () => {
-    const el = stageRef.current;
-    if (!el) return;
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        setIsFull(false);
-      } else if (el.requestFullscreen) {
-        await el.requestFullscreen();
-        setIsFull(true);
-      }
-    } catch {
-      /* fullscreen not available here */
-    }
-  };
 
   const pill = PILL[p.status];
   const nearest = p.targets.length
     ? Math.min(...p.targets.map((t) => Math.hypot(t.x_mm, t.y_mm))) / 1000
     : null;
-  const hasPoints = (p.points?.length ?? 0) > 0;
   const metricDef = SERIES.find((s) => s.id === metric)!;
 
   return (
@@ -188,144 +73,45 @@ export function LiveRadarView(p: LiveRadarViewProps) {
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         {/* ---------- left: radar ---------- */}
-        <section className={cn(CARD, "min-w-0 p-3 sm:p-4")} aria-label="Radar">
-          <div className="flex items-center justify-between gap-2 pb-3">
-            <div
-              className="flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-              role="tablist"
-              aria-label="Radar view"
+        <RadarStage
+          room={p.room}
+          targets={p.targets}
+          trails={p.trails}
+          points={p.points}
+          hub={p.hub}
+          stale={p.stale}
+          selectedId={p.selectedId}
+          onSelect={p.onSelect}
+          heatmap={p.heatmap}
+          headerRight={
+            <button
+              type="button"
+              onClick={p.onToggleFrozen}
+              className="inline-flex size-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              aria-label={p.frozen ? "Resume live view" : "Freeze view"}
+              title={p.frozen ? "Resume live view" : "Freeze view"}
             >
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === t.id}
-                  onClick={() => setTab(t.id)}
-                  className={cn(
-                    "inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-4 text-sm font-semibold transition",
-                    tab === t.id
-                      ? "bg-blue-600 text-white shadow"
-                      : "text-slate-600 hover:bg-slate-100",
-                  )}
-                >
-                  <t.icon className="size-4" />
-                  <span className={cn(tab !== t.id && "hidden sm:inline")}>{t.label}</span>
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={p.onToggleFrozen}
-                className="inline-flex size-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
-                aria-label={p.frozen ? "Resume live view" : "Freeze view"}
-                title={p.frozen ? "Resume live view" : "Freeze view"}
-              >
-                {p.frozen ? <Play className="size-4" /> : <Pause className="size-4" />}
-              </button>
-              <button
-                type="button"
-                onClick={toggleFull}
-                className="inline-flex size-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
-                aria-label={isFull ? "Exit full screen" : "Full screen"}
-              >
-                {isFull ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-              </button>
-            </div>
-          </div>
-
-          <div
-            ref={stageRef}
-            className={cn(
-              "relative overflow-hidden rounded-2xl",
-              tab === "3d"
-                ? "bg-[radial-gradient(ellipse_at_50%_30%,#14307a_0%,#0a1a4f_45%,#050b26_100%)]"
-                : "bg-white",
-              "h-[56vh] min-h-[340px] sm:h-[460px] lg:h-[520px]",
-            )}
-          >
-            {tab === "3d" && (
-              <>
-                <Radar3D
-                  className="size-full"
-                  room={p.room}
-                  targets={p.targets}
-                  trails={p.trails}
-                  points={p.points}
-                  view={view}
-                  show={show}
-                  hub={p.hub}
-                  selectedId={p.selectedId}
-                  onSelect={p.onSelect}
-                  stale={p.stale}
-                />
-                {p.status === "unknown" && (
-                  <div className="absolute inset-0 flex items-center justify-center p-6 text-center">
-                    <div className="rounded-2xl bg-[#0a1740]/90 px-5 py-4 text-sm text-slate-200 ring-1 ring-sky-400/40">
-                      <div className="font-semibold text-white">No radar data yet</div>
-                      Waiting for a registered device assigned to this room to report.
-                    </div>
+              {p.frozen ? <Play className="size-4" /> : <Pause className="size-4" />}
+            </button>
+          }
+          overlay={
+            <>
+              {p.status === "unknown" && (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-6 text-center">
+                  <div className="rounded-2xl bg-[#0a1740]/90 px-5 py-4 text-sm text-slate-200 ring-1 ring-sky-400/40">
+                    <div className="font-semibold text-white">No radar data yet</div>
+                    Waiting for a registered device assigned to this room to report.
                   </div>
-                )}
-                {p.stale && p.status !== "unknown" && (
-                  <div className="absolute left-3 top-3 rounded-lg bg-amber-500/90 px-3 py-1 text-xs font-semibold text-white">
-                    No fresh data · last update {p.lastUpdateLabel}
-                  </div>
-                )}
-              </>
-            )}
-            {tab === "2d" && <div className="size-full overflow-auto p-2">{p.topView}</div>}
-            {tab === "heatmap" && <div className="size-full overflow-auto p-2">{p.heatmap}</div>}
-          </div>
-
-          {tab === "3d" && (
-            <div className="mt-3 flex min-w-0 flex-col gap-3 border-t border-slate-100 pt-3 lg:flex-row lg:items-center lg:gap-6">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  View
-                </span>
-                <div className="flex min-w-0 gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {VIEWS.map((v) => (
-                    <Chip key={v.id} active={view === v.id} onClick={() => setView(v.id)}>
-                      {v.id === "perspective" && <Box className="size-3.5" />}
-                      {v.label}
-                    </Chip>
-                  ))}
                 </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Display
-                </span>
-                <div className="flex flex-wrap gap-x-4">
-                  <Toggle
-                    label="Targets"
-                    checked={show.targets}
-                    onChange={(v) => setShow((s) => ({ ...s, targets: v }))}
-                  />
-                  <Toggle
-                    label="Range Grid"
-                    checked={show.grid}
-                    onChange={(v) => setShow((s) => ({ ...s, grid: v }))}
-                  />
-                  <Toggle
-                    label="Point Cloud"
-                    checked={show.pointCloud && hasPoints}
-                    disabled={!hasPoints}
-                    title={hasPoints ? undefined : "No RD-61 point cloud is being received"}
-                    onChange={(v) => setShow((s) => ({ ...s, pointCloud: v }))}
-                  />
-                  <Toggle
-                    label="Trajectory"
-                    checked={show.trajectory}
-                    onChange={(v) => setShow((s) => ({ ...s, trajectory: v }))}
-                  />
+              )}
+              {p.stale && p.status !== "unknown" && (
+                <div className="absolute bottom-3 left-3 z-10 rounded-lg bg-amber-500/90 px-3 py-1 text-xs font-semibold text-white">
+                  No fresh data · last update {p.lastUpdateLabel}
                 </div>
-              </div>
-            </div>
-          )}
-        </section>
+              )}
+            </>
+          }
+        />
 
         {/* ---------- right: details ---------- */}
         <div className="min-w-0 space-y-4">
@@ -408,8 +194,11 @@ export function LiveRadarView(p: LiveRadarViewProps) {
                         )}
                       >
                         <span className="flex items-center gap-2 text-sm font-bold text-slate-900">
-                          <span className="size-2.5 rounded-full bg-emerald-500" />
-                          ID: {String(t.target_id).padStart(2, "0")}
+                          <span
+                            className="size-2.5 rounded-full"
+                            style={{ backgroundColor: targetColor(t.target_id) }}
+                          />
+                          ID: {targetLabel(t.target_id)}
                         </span>
                         <span>
                           <span className="block text-[11px] text-slate-400">Position</span>
@@ -438,6 +227,8 @@ export function LiveRadarView(p: LiveRadarViewProps) {
               </ul>
             )}
           </section>
+
+          <DemoVitalsCard targets={p.targets} now={p.now} />
 
           <section className={cn(CARD, "p-4")} aria-label="Live signal">
             <div className="flex items-center justify-between gap-3">

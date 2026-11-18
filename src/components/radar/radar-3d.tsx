@@ -1,4 +1,6 @@
 import { useId, useMemo } from "react";
+import { targetColor, targetLabel } from "@/lib/radar/palette";
+import { FIGURE_HEIGHT, StandingFigure, WalkingFigure } from "@/components/radar/human-figures";
 import type { Door, LD2450Target, RD61Point, RoomObject, RoomZone } from "@/lib/radar/types";
 import {
   arcPoints,
@@ -51,6 +53,7 @@ const OBJECT_COLOR: Record<string, string> = {
 const ZONE_COLOR: Record<string, string> = {
   hazard: "#f87171",
   restricted: "#fb923c",
+  entry: "#34d399",
   bed: "#60a5fa",
   sofa: "#818cf8",
   bathroom: "#2dd4bf",
@@ -415,7 +418,7 @@ export function Radar3D({
                 })
                 .join(" ")}
               fill="none"
-              stroke="#34d399"
+              stroke={targetColor(Number(id))}
               strokeOpacity="0.7"
               strokeWidth={sw * 2}
               strokeLinecap="round"
@@ -523,7 +526,8 @@ export function Radar3D({
             );
             const labelX = (view === "top" ? foot.x : head.x) + fs * 1.6;
             const labelY = (view === "top" ? foot.y : head.y) - fs * 0.5;
-            const idStr = String(t.target_id).padStart(2, "0");
+            const idStr = targetLabel(t.target_id);
+            const col = targetColor(t.target_id);
             return (
               <g
                 key={`t-${t.target_id}`}
@@ -533,58 +537,34 @@ export function Radar3D({
               >
                 <polygon
                   points={ring.join(" ")}
-                  fill="#34d399"
+                  fill={col}
                   fillOpacity="0.25"
-                  stroke="#34d399"
+                  stroke={col}
                   strokeOpacity="0.9"
                   strokeWidth={sw * (sel ? 3 : 1.6)}
                 />
                 {view !== "top" &&
                   (() => {
-                    // A simple standing figure: two legs, torso, head (about 1.7 m tall).
-                    const spread = 130;
-                    const side = view === "right" ? { x: 0, y: spread } : { x: spread, y: 0 };
-                    const hipL = at(r.x - side.x, r.y - side.y, 880);
-                    const hipR = at(r.x + side.x, r.y + side.y, 880);
-                    const footL = at(r.x - side.x * 1.3, r.y - side.y * 1.3, 0);
-                    const footR = at(r.x + side.x * 1.3, r.y + side.y * 1.3, 0);
-                    const hip = at(r.x, r.y, 900);
-                    const neck = at(r.x, r.y, 1450);
-                    const headC = at(r.x, r.y, 1620);
+                    // Silhouettes and corner brackets from the radar design: a standing person when still,
+                    // a walking one when moving. Scaled to the projected height of the person.
+                    const k = Math.abs(foot.y - head.y) / FIGURE_HEIGHT;
+                    const moving = Math.abs(t.speed_cms) > 10;
+                    const bw = 46 * k;
+                    const bh = 92 * k;
+                    const bx = foot.x - bw / 2;
+                    const by = foot.y - bh + 8 * k;
+                    const c7 = 7 * k;
                     return (
-                      <g stroke="#34d399" strokeLinecap="round" fill="none">
-                        <line
-                          x1={footL.x}
-                          y1={footL.y}
-                          x2={hipL.x}
-                          y2={hipL.y}
-                          strokeOpacity="0.6"
-                          strokeWidth={fs * 0.6}
+                      <g>
+                        <path
+                          d={`M${bx},${by + c7}V${by}H${bx + c7}M${bx + bw - c7},${by}H${bx + bw}V${by + c7}M${bx + bw},${by + bh - c7}V${by + bh}H${bx + bw - c7}M${bx + c7},${by + bh}H${bx}V${by + bh - c7}`}
+                          stroke={col}
+                          strokeWidth={sw * (sel ? 3 : 2)}
+                          fill="none"
                         />
-                        <line
-                          x1={footR.x}
-                          y1={footR.y}
-                          x2={hipR.x}
-                          y2={hipR.y}
-                          strokeOpacity="0.6"
-                          strokeWidth={fs * 0.6}
-                        />
-                        <line
-                          x1={hip.x}
-                          y1={hip.y}
-                          x2={neck.x}
-                          y2={neck.y}
-                          strokeOpacity="0.7"
-                          strokeWidth={fs * 1.25}
-                        />
-                        <circle
-                          cx={headC.x}
-                          cy={headC.y}
-                          r={fs * 0.7}
-                          fill="#6ee7b7"
-                          fillOpacity="0.9"
-                          stroke="none"
-                        />
+                        <g transform={`translate(${foot.x} ${foot.y}) scale(${k})`}>
+                          {moving ? <WalkingFigure c={col} /> : <StandingFigure c={col} />}
+                        </g>
                       </g>
                     );
                   })()}
@@ -595,15 +575,15 @@ export function Radar3D({
                     rx={fs * 0.6}
                     fill="#0a1740"
                     fillOpacity="0.92"
-                    stroke={sel ? "#6ee7b7" : "#34d399"}
+                    stroke={col}
                     strokeOpacity="0.9"
                     strokeWidth={sw * (sel ? 2.4 : 1.2)}
                   />
                   <text x={fs * 0.7} y={fs * 1.2} fontSize={fs} fontWeight="700" fill="#f8fafc">
                     ID: {idStr}
                   </text>
-                  <text x={fs * 0.7} y={fs * 2.3} fontSize={fs * 0.78} fill="#94a3b8">
-                    ({(t.x_mm / 1000).toFixed(1)} m, {(t.y_mm / 1000).toFixed(1)} m)
+                  <text x={fs * 0.7} y={fs * 2.3} fontSize={fs * 0.85} fontWeight="600" fill={col}>
+                    ({(Math.hypot(t.x_mm, t.y_mm) / 1000).toFixed(1)} m)
                   </text>
                 </g>
               </g>

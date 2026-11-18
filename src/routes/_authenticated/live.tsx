@@ -7,7 +7,6 @@ import { isStale, roomState, useLive, type RoomLive } from "@/lib/radar/live";
 import { deviceConnection, isPointInPolygon, type LD2450Target } from "@/lib/radar/types";
 import { calculateMovementHeatmap, type SensorMountTransform } from "@/lib/analytics";
 import { Empty, timeAgo } from "@/components/app/status";
-import { LD2450View } from "@/components/radar/ld2450-view";
 import { LiveRadarView, type SignalSample } from "@/components/radar/live-radar-view";
 import { MovementHeatmap } from "@/components/analytics/movement-heatmap";
 import { Button } from "@/components/ui/button";
@@ -236,27 +235,9 @@ function LivePage() {
       points={view?.rd?.points}
       hub={hub}
       stale={stale && !frozen}
+      now={live.now}
       lastUpdateLabel={view?.ld ? timeAgo(view.ld.timestamp, live.now) : "—"}
       series={series}
-      topView={
-        view?.ld ? (
-          <LD2450View
-            widthMm={room.width_mm}
-            lengthMm={room.length_mm}
-            doors={room.doors}
-            zones={room.zones}
-            objects={room.objects}
-            frame={view.ld}
-            selected={selected}
-            onSelect={setSelected}
-            stale={stale && !frozen}
-          />
-        ) : (
-          <p className="py-20 text-center text-sm text-slate-500">
-            No data has been received for this room yet.
-          </p>
-        )
-      }
       heatmap={
         heatmapData && (trajectories.data?.length ?? 0) > 0 ? (
           <MovementHeatmap

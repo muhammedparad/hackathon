@@ -5,6 +5,7 @@ import type { AlertsSummary } from "./types";
 const ALERT_EVENT_TYPES = new Set<string>([
   "restricted_zone_entry",
   "restricted_zone_exit",
+  "restricted_zone_presence",
   "hazard_zone_entry",
   "hazard_prolonged_presence",
   "unexpected_entry",

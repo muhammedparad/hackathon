@@ -260,6 +260,8 @@ export interface ProcessTelemetryOptions {
   publish?: boolean;
   /** When the server received the frame (epoch ms). Defaults to now. */
   receivedAtMs?: number;
+  /** Write the raw telemetry / radar_targets rows (default true). false: analyse only (alerts, tracks, occupancy). */
+  storeRaw?: boolean;
 }
 
 /** Push one real frame (or a "sensor disconnected" notice) to the owner's open dashboards. */
@@ -358,50 +360,58 @@ export async function processTelemetry(
   try {
     if (db) {
       if (dataGap) await recordDataGap(db, device, dataGap);
-      // Write to telemetry collection with explicit capture vs reception timestamps
-      const telRef = await db.collection("telemetry").add({
-        device_id: device.id,
-        room_id: device.room_id,
-        sensor_type: payload.data.sensor_type,
-        timestamp: effectiveTimestamp,
-        captured_at: captureTimestampIso,
-        received_at: receivedAtIso,
-        device_time_synced: isDeviceTimeSynced,
-        captured_at_ms: payload.captured_at_ms ?? null,
-        payload: payload.data,
-      });
-
-      // Write targets if LD2450
-      if (payload.data.sensor_type === "ld2450" && payload.data.targets.length) {
-        const batch = db.batch();
-        for (const t of payload.data.targets) {
-          const targetRef = db.collection("radar_targets").doc();
-          batch.set(targetRef, {
+      // Every frame goes through the alert engine and the trajectory recorder below. Only the raw database rows
+      // are throttled (the device WebSocket asks for storeRaw: false on the frames in between), so a short
+      // speed spike, which the fall rule needs, is never lost to storage throttling.
+      let telemetryDocId: string | null = null;
+      if (opts.storeRaw !== false) {
+        // Write to telemetry collection with explicit capture vs reception timestamps
+        telemetryDocId = (
+          await db.collection("telemetry").add({
             device_id: device.id,
             room_id: device.room_id,
-            telemetry_id: telRef.id,
-            target_id: t.target_id,
-            x_mm: t.x_mm,
-            y_mm: t.y_mm,
-            speed_cms: t.speed_cms,
+            sensor_type: payload.data.sensor_type,
             timestamp: effectiveTimestamp,
             captured_at: captureTimestampIso,
             received_at: receivedAtIso,
             device_time_synced: isDeviceTimeSynced,
-          });
-        }
-        await batch.commit();
-      }
+            captured_at_ms: payload.captured_at_ms ?? null,
+            payload: payload.data,
+          })
+        ).id;
 
-      // Update device status & last seen
-      await db.collection("devices").doc(device.id).set(
-        {
-          status: "connected",
-          last_seen: ts,
-          updated_at: ts,
-        },
-        { merge: true },
-      );
+        // Write targets if LD2450
+        if (payload.data.sensor_type === "ld2450" && payload.data.targets.length) {
+          const batch = db.batch();
+          for (const t of payload.data.targets) {
+            const targetRef = db.collection("radar_targets").doc();
+            batch.set(targetRef, {
+              device_id: device.id,
+              room_id: device.room_id,
+              telemetry_id: telemetryDocId,
+              target_id: t.target_id,
+              x_mm: t.x_mm,
+              y_mm: t.y_mm,
+              speed_cms: t.speed_cms,
+              timestamp: effectiveTimestamp,
+              captured_at: captureTimestampIso,
+              received_at: receivedAtIso,
+              device_time_synced: isDeviceTimeSynced,
+            });
+          }
+          await batch.commit();
+        }
+
+        // Update device status & last seen
+        await db.collection("devices").doc(device.id).set(
+          {
+            status: "connected",
+            last_seen: ts,
+            updated_at: ts,
+          },
+          { merge: true },
+        );
+      }
 
       // Phase 3.1 & 3.2: Run stateful AlertEngine on authenticated hardware LD2450 telemetry with target device isolation
       // Note (RD-61 Limitation): RD-61 point cloud payloads are ingested above for visualization,
@@ -560,7 +570,7 @@ export async function processTelemetry(
         }
       }
 
-      return json({ ok: true, telemetry_id: telRef.id });
+      return json({ ok: true, telemetry_id: telemetryDocId });
     } else {
       // Local dev mode without Firestore Admin credentials
       if (payload.data.sensor_type === "ld2450" && device.room_id) {

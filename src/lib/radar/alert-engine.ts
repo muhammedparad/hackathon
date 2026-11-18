@@ -23,6 +23,8 @@ export const DEFAULT_ALERT_CONFIG = {
   doorProximityMm: 600,
   /** A new target first seen within this distance of an entry point counts as entering through it */
   entryPointRadiusMm: 1500,
+  /** A new target counts as inside an entry zone when within this margin (mm) of its edge */
+  entryZoneMarginMm: 300,
   /** A new target near where a track was lost this recently (ms) is the same person re-acquired, not an entry */
   reacquireWindowMs: 20_000,
   /** ...and within this distance (mm) of the lost position, or of any live track */
@@ -33,6 +35,8 @@ export const DEFAULT_ALERT_CONFIG = {
   entrySilenceGapMs: 30_000,
   /** Target vanishing this soon after an abrupt-motion spike, away from any door, is a fall candidate */
   fallVanishWindowMs: 8_000,
+  /** While someone stays inside a restricted zone, alert again this often (ms) */
+  restrictedRepeatMs: 30_000,
   /** Door unexpected entry speed threshold in cm/s */
   doorEntrySpeedCms: 15,
   /** Door inward normal displacement threshold in mm */
@@ -98,6 +102,8 @@ export interface TargetTrackingState {
   activeZones: Map<string, number>;
   // Flags to prevent repeated alerts during same session
   hazardProlongedAlerted: Set<string>;
+  // When each zone last alerted for this target (entry, then repeats while inside)
+  zoneRepeatAt: Map<string, number>;
   prolongedAlerted: Set<string>;
 
   // Door proximity tracking
@@ -324,6 +330,7 @@ export class AlertEngine {
           firstSeen: timestamp,
           activeZones: new Map(),
           hazardProlongedAlerted: new Set(),
+          zoneRepeatAt: new Map(),
           prolongedAlerted: new Set(),
           lastUnexpectedEntryTime: 0,
           history: [],
@@ -415,6 +422,7 @@ export class AlertEngine {
         if (!state.activeZones.has(zone.id)) {
           // New Zone Entry transition
           state.activeZones.set(zone.id, timestamp);
+          state.zoneRepeatAt.set(zone.id, timestamp);
 
           if (zone.type === "restricted" || (zone.alert_on_entry && zone.type !== "hazard")) {
             alerts.push({
@@ -481,6 +489,45 @@ export class AlertEngine {
           // Continued presence: check prolonged dwell in hazard zone
           const entryTime = state.activeZones.get(zone.id) ?? timestamp;
           const dwellMs = timestamp - entryTime;
+          // Still inside a restricted zone: repeat the alert, so one missed popup does not hide the situation
+          if (zone.type !== "hazard" && (zone.type === "restricted" || zone.alert_on_entry)) {
+            const lastAlertAt = state.zoneRepeatAt.get(zone.id) ?? entryTime;
+            if (timestamp - lastAlertAt >= this.config.restrictedRepeatMs) {
+              state.zoneRepeatAt.set(zone.id, timestamp);
+              const insideSec = Math.round((timestamp - entryTime) / 1000);
+              alerts.push({
+                room_id: this.room.id,
+                event_type: "restricted_zone_presence",
+                severity: "high",
+                description: `Target #${state.targetId} is still inside restricted zone '${zone.name}' (${insideSec}s)`,
+                target_id: state.targetId,
+                device_id: state.deviceId,
+                sensor_type: state.sensorType,
+                simulated,
+                timestamp: new Date(timestamp).toISOString(),
+                x_mm: state.x_mm,
+                y_mm: state.y_mm,
+                z_mm: state.z_mm,
+                zone_id: zone.id,
+                zone_name: zone.name,
+                confidence: "high",
+                evidence_quality: "High Evidence Quality",
+                evidence: {
+                  rule_id: "restricted_zone_presence",
+                  summary: `Target has stayed inside restricted zone '${zone.name}' for ${insideSec} seconds.`,
+                  measured_value: `${insideSec}s inside`,
+                  threshold_value: `Repeats every ${Math.round(this.config.restrictedRepeatMs / 1000)}s while inside`,
+                  coordinates: { x_mm: state.x_mm, y_mm: state.y_mm, z_mm: state.z_mm },
+                  zone_id: zone.id,
+                  zone_name: zone.name,
+                  zone_type: zone.type,
+                  confidence: "high",
+                  evidence_quality: "High Evidence Quality",
+                  confidence_score: 0.95,
+                },
+              });
+            }
+          }
           const hazardThresholdMs =
             zone.max_dwell_minutes !== undefined && zone.max_dwell_minutes > 0
               ? Math.min(zone.max_dwell_minutes * 60_000, this.config.hazardProlongedDwellMs)
@@ -533,6 +580,7 @@ export class AlertEngine {
     for (const [zoneId, entryTime] of state.activeZones.entries()) {
       if (!currentlyInZoneIds.has(zoneId)) {
         state.activeZones.delete(zoneId);
+        state.zoneRepeatAt.delete(zoneId);
         state.hazardProlongedAlerted.delete(zoneId);
         state.prolongedAlerted.delete(zoneId);
 
@@ -592,8 +640,12 @@ export class AlertEngine {
     simulated: boolean,
     alerts: DetectedAlert[],
   ) {
+    // Legitimate ways in: doors marked entry / both, and zones of type "entry" drawn by the user.
     const entryDoors = doors.filter((d) => d.type === "entry" || d.type === "both");
-    if (entryDoors.length === 0 || state.baseline) return;
+    const entryZones = (this.room.zones ?? []).filter(
+      (z) => z.type === "entry" && z.polygon.length >= 3,
+    );
+    if ((entryDoors.length === 0 && entryZones.length === 0) || state.baseline) return;
 
     const reacquired =
       this.recentLosses.some(
@@ -606,12 +658,36 @@ export class AlertEngine {
       });
     if (reacquired) return;
 
-    let nearest: { door: Door; dist: number } | null = null;
-    for (const door of entryDoors) {
-      const dist = Math.hypot(rx - door.x_mm, ry - door.y_mm);
-      if (!nearest || dist < nearest.dist) nearest = { door, dist };
-    }
-    if (!nearest) return;
+    // Distance to every entry (0 inside an entry zone), measured in the same unit so they compare directly.
+    type EntryRef = {
+      kind: "door" | "zone";
+      id: string;
+      name: string;
+      dist: number;
+      allowed: number;
+    };
+    const refs: EntryRef[] = [
+      ...entryDoors.map((d) => ({
+        kind: "door" as const,
+        id: d.id,
+        name: d.name,
+        dist: Math.hypot(rx - d.x_mm, ry - d.y_mm),
+        allowed: this.config.entryPointRadiusMm,
+      })),
+      ...entryZones.map((z) => ({
+        kind: "zone" as const,
+        id: z.id,
+        name: z.name,
+        dist: isPointInPolygon(rx, ry, z.polygon)
+          ? 0
+          : distanceToPolygonBoundary(rx, ry, z.polygon),
+        allowed: this.config.entryZoneMarginMm,
+      })),
+    ];
+    // The entry the person is inside / closest to, relative to how close it must be to count
+    const nearest = refs.reduce((best, r) =>
+      r.dist - r.allowed < best.dist - best.allowed ? r : best,
+    );
     const coordinates = { x_mm: state.x_mm, y_mm: state.y_mm, z_mm: state.z_mm };
     const base = {
       room_id: this.room.id,
@@ -622,23 +698,31 @@ export class AlertEngine {
       timestamp: new Date(timestamp).toISOString(),
       ...coordinates,
     };
+    const ref =
+      nearest.kind === "door"
+        ? { door_id: nearest.id, door_name: nearest.name }
+        : { zone_id: nearest.id, zone_name: nearest.name };
+    const what = nearest.kind === "door" ? "entry point" : "entry zone";
 
-    if (nearest.dist <= this.config.entryPointRadiusMm) {
+    if (nearest.dist <= nearest.allowed) {
       alerts.push({
         ...base,
         event_type: "door_entry",
         severity: "info",
-        description: `Target #${state.targetId} entered through ${nearest.door.name}`,
+        description: `Target #${state.targetId} entered through ${nearest.name}`,
+        ...(nearest.kind === "zone" ? { zone_id: nearest.id, zone_name: nearest.name } : {}),
         confidence: "medium",
         evidence_quality: "Moderate Evidence Quality",
         evidence: {
           rule_id: "door_entry",
-          summary: `A new target appeared ${Math.round(nearest.dist)}mm from entry point '${nearest.door.name}'.`,
-          measured_value: `Distance to ${nearest.door.name}: ${Math.round(nearest.dist)}mm`,
-          threshold_value: `Within ${this.config.entryPointRadiusMm}mm of an entry point`,
+          summary:
+            nearest.dist === 0
+              ? `A new target appeared inside ${what} '${nearest.name}'.`
+              : `A new target appeared ${Math.round(nearest.dist)}mm from ${what} '${nearest.name}'.`,
+          measured_value: `Distance to ${nearest.name}: ${Math.round(nearest.dist)}mm`,
+          threshold_value: `Within ${nearest.allowed}mm of an ${what}`,
           coordinates,
-          door_id: nearest.door.id,
-          door_name: nearest.door.name,
+          ...ref,
           confidence: "medium",
           evidence_quality: "Moderate Evidence Quality",
           confidence_score: 0.8,
@@ -648,21 +732,25 @@ export class AlertEngine {
     }
 
     state.lastUnexpectedEntryTime = timestamp;
+    const away = Math.max(0, nearest.dist - nearest.allowed);
     alerts.push({
       ...base,
       event_type: "unexpected_entry",
       severity: "high",
-      description: `Target #${state.targetId} appeared away from any entry point (nearest: ${nearest.door.name}, ${(nearest.dist / 1000).toFixed(1)} m)`,
+      description:
+        nearest.kind === "zone"
+          ? `Target #${state.targetId} appeared outside the entry zone (nearest: ${nearest.name}, ${(away / 1000).toFixed(1)} m away)`
+          : `Target #${state.targetId} appeared away from any entry point (nearest: ${nearest.name}, ${(away / 1000).toFixed(1)} m away)`,
+      ...(nearest.kind === "zone" ? { zone_id: nearest.id, zone_name: nearest.name } : {}),
       confidence: "medium",
       evidence_quality: "Moderate Evidence Quality",
       evidence: {
         rule_id: "unexpected_entry",
-        summary: `A new target first appeared at (${state.x_mm}, ${state.y_mm}) mm, ${Math.round(nearest.dist)}mm from the nearest entry point '${nearest.door.name}'. People normally enter through an entry point.`,
-        measured_value: `Distance to nearest entry point: ${Math.round(nearest.dist)}mm`,
-        threshold_value: `Entry points: within ${this.config.entryPointRadiusMm}mm`,
+        summary: `A new target first appeared at (${state.x_mm}, ${state.y_mm}) mm, ${Math.round(away)}mm outside the nearest ${what} '${nearest.name}'. People normally enter through an entry point or entry zone.`,
+        measured_value: `Distance outside the nearest ${what}: ${Math.round(away)}mm`,
+        threshold_value: `Entry doors: within ${this.config.entryPointRadiusMm}mm; entry zones: inside (${this.config.entryZoneMarginMm}mm margin)`,
         coordinates,
-        door_id: nearest.door.id,
-        door_name: nearest.door.name,
+        ...ref,
         confidence: "medium",
         evidence_quality: "Moderate Evidence Quality",
         confidence_score: 0.7,
@@ -1099,6 +1187,17 @@ export class AlertEngine {
     const doors = this.room.doors ?? [];
     if (doors.some((d) => Math.hypot(rx - d.x_mm, ry - d.y_mm) <= this.config.entryPointRadiusMm)) {
       return; // left through a door
+    }
+    if (
+      (this.room.zones ?? []).some(
+        (z) =>
+          z.type === "entry" &&
+          z.polygon.length >= 3 &&
+          (isPointInPolygon(rx, ry, z.polygon) ||
+            distanceToPolygonBoundary(rx, ry, z.polygon) <= this.config.entryZoneMarginMm),
+      )
+    ) {
+      return; // left through an entry zone
     }
     if (isTargetOnRestingFurniture(rx, ry, this.room.objects ?? [], this.room.zones ?? [])) return;
     state.fallAlertEmitted = true;

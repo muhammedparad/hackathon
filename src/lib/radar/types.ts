@@ -60,6 +60,7 @@ export const EVENT_TYPES = [
   // Phase 3: Explainable Alerts & Hazard Detection
   "restricted_zone_entry",
   "restricted_zone_exit",
+  "restricted_zone_presence",
   "hazard_zone_entry",
   "hazard_prolonged_presence",
   "unexpected_entry",
@@ -83,6 +84,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   point_cloud_update: "Point cloud update",
   restricted_zone_entry: "Restricted zone entry",
   restricted_zone_exit: "Restricted zone exit",
+  restricted_zone_presence: "Still in restricted zone",
   hazard_zone_entry: "Hazard zone entry",
   hazard_prolonged_presence: "Prolonged hazard presence",
   unexpected_entry: "Entry away from an entry point",
@@ -146,7 +148,8 @@ export interface Door {
   type: "entry" | "exit" | "both";
 }
 
-export type ZoneType = "hazard" | "restricted" | "bed" | "sofa" | "bathroom" | "custom";
+/** "entry" marks where people normally come in; appearing anywhere else raises an alert. */
+export type ZoneType = "hazard" | "restricted" | "entry" | "bed" | "sofa" | "bathroom" | "custom";
 
 export interface RoomZone {
   id: string;

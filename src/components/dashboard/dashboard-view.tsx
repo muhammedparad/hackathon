@@ -401,7 +401,7 @@ function DateInsight({ p }: { p: DashboardProps }) {
                               width: `${100 / 24 - 0.4}%`,
                               opacity: 0.25 + 0.75 * (n / maxBin),
                             }}
-                            title={`${n} movement events`}
+                            title={`${String(h).padStart(2, "0")}:00 · ${n} movement steps`}
                           />
                         ) : null,
                       )}

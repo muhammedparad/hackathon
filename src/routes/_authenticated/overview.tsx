@@ -1,7 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { analyticsEventsQuery, devicesQuery, roomsQuery } from "@/lib/data";
+import { analyticsEventsQuery, devicesQuery, roomsQuery, trajectoriesQuery } from "@/lib/data";
+import { movementPerHour } from "@/lib/analytics/movement";
 import { roomState, useLive } from "@/lib/radar/live";
 import { deviceConnection } from "@/lib/radar/types";
 import { isAlertEvent, occupancySessions, occupiedMs } from "@/lib/analytics";
@@ -30,8 +31,6 @@ export const Route = createFileRoute("/_authenticated/overview")({
   component: Overview,
 });
 
-const MOVEMENT_TYPES = new Set(["target_moved", "target_detected"]);
-
 function ageLabel(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s ago`;
@@ -48,6 +47,28 @@ function Overview() {
   const hist = useQuery(analyticsEventsQuery(since));
 
   const roomList = useMemo(() => rooms.data ?? [], [rooms.data]);
+
+  // Movement comes from the walking tracks the server stored (a track is saved shortly after the person leaves view
+  // or after about two minutes), so it refreshes every minute.
+  const dayStartIso = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  }, []);
+  const trackQueries = useQueries({
+    queries: roomList.map((r) => ({
+      ...trajectoriesQuery({ roomId: r.id, fromIso: dayStartIso, limitCount: 500 }),
+      refetchInterval: 60_000,
+    })),
+  });
+  const tracksKey = trackQueries.map((q) => q.dataUpdatedAt).join(",");
+  const tracksByRoom = useMemo(() => {
+    const m = new Map<string, NonNullable<(typeof trackQueries)[number]["data"]>>();
+    roomList.forEach((r, i) => m.set(r.id, trackQueries[i]?.data ?? []));
+    return m;
+    // trackQueries is a new array every render; its data changes exactly when tracksKey does
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomList, tracksKey]);
 
   const roomCards = useMemo<DashboardRoom[]>(
     () =>
@@ -106,12 +127,7 @@ function Overview() {
 
     const rows: TimelineRow[] = roomList.map((r) => {
       const mine = sessions.filter((s) => s.room_id === r.id && s.end > dayStart);
-      const bins = new Array<number>(24).fill(0);
-      for (const e of today) {
-        if (e.room_id !== r.id || !MOVEMENT_TYPES.has(e.event_type)) continue;
-        const h = new Date(e.timestamp).getHours();
-        bins[h] = (bins[h] ?? 0) + 1;
-      }
+      const bins = movementPerHour(tracksByRoom.get(r.id) ?? [], dayStart);
       return {
         roomId: r.id,
         roomName: r.name,
@@ -129,7 +145,7 @@ function Overview() {
     const unacked = events.filter((e) => isAlertEvent(e) && !e.acknowledged);
     unacked.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
     return { dayStart, rows, eventsToday: today.length, unacked };
-  }, [hist.data, roomList, live.now]);
+  }, [hist.data, roomList, live.now, tracksByRoom]);
 
   if (rooms.isLoading) {
     return (

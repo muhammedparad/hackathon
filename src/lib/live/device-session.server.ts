@@ -60,6 +60,12 @@ export interface DeviceSessionDeps {
     payload: TelemetryBody,
     receivedAtMs: number,
   ): Promise<unknown>;
+  /** Frames that are NOT stored (throttled) still get analysed: alerts, tracks, occupancy. Optional. */
+  analyzeTelemetry?(
+    device: AuthenticatedDevice,
+    payload: TelemetryBody,
+    receivedAtMs: number,
+  ): Promise<unknown>;
   /** Heartbeat processing, including the live "device seen" push. */
   handleHeartbeat(device: AuthenticatedDevice, body: HeartbeatBody): Promise<unknown>;
   authTimeoutMs?: number;
@@ -251,6 +257,9 @@ export function createDeviceSession(socket: DeviceSocket, deps: DeviceSessionDep
           lastStoredShape = shape;
           lastStoredAt = receivedAtMs;
           enqueue(() => deps.storeTelemetry(current, parsed.data, receivedAtMs));
+        } else if (deps.analyzeTelemetry) {
+          const analyze = deps.analyzeTelemetry;
+          enqueue(() => analyze(current, parsed.data, receivedAtMs));
         }
         return;
       }

@@ -381,11 +381,13 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
           ? "Hazard Zone"
           : type === "restricted"
             ? "Restricted Area"
-            : type === "bed"
-              ? "Bed"
-              : type === "sofa"
-                ? "Sofa"
-                : "Zone",
+            : type === "entry"
+              ? "Entry zone"
+              : type === "bed"
+                ? "Bed"
+                : type === "sofa"
+                  ? "Sofa"
+                  : "Zone",
       type,
       polygon: [
         { x_mm: startX, y_mm: startY },
@@ -693,8 +695,9 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
                 <p className="text-xs text-muted-foreground">
                   Draw a zone by giving its position and size (the preview above updates as you
                   type). With "Alert on entry" on, a popup and an event are raised when someone
-                  steps into it; bed and sofa zones are where lying still is normal, so they never
-                  count as a fall.
+                  steps into it. An "Entry zone" marks where people normally come in (put it at the
+                  door): someone who first appears anywhere outside it raises an alert. Bed and sofa
+                  zones are where lying still is normal, so they never count as a fall.
                 </p>
                 <div className="flex gap-1.5">
                   <Button
@@ -712,6 +715,14 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
                     onClick={() => addZone("restricted")}
                   >
                     <ShieldAlert className="size-3.5 mr-1 text-destructive" /> + Restricted
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => addZone("entry")}
+                  >
+                    <DoorOpen className="size-3.5 mr-1 text-emerald-600" /> + Entry zone
                   </Button>
                   <Button type="button" size="sm" variant="outline" onClick={() => addZone("bed")}>
                     <Plus className="size-3.5 mr-1" /> + Bed / Sofa
@@ -779,6 +790,7 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
                             <SelectContent>
                               <SelectItem value="hazard">Hazard Zone</SelectItem>
                               <SelectItem value="restricted">Restricted Area</SelectItem>
+                              <SelectItem value="entry">Entry zone</SelectItem>
                               <SelectItem value="bed">Bed</SelectItem>
                               <SelectItem value="sofa">Sofa</SelectItem>
                               <SelectItem value="custom">Custom</SelectItem>

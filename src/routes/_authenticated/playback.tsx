@@ -25,7 +25,9 @@ import { interpolateTargetsAtTime, type InterpolatedFrame } from "@/lib/radar/pl
 import type { TrajectorySegment } from "@/lib/radar/types";
 import { Empty, PageHeader, Panel, Pill } from "@/components/app/status";
 import { HistoryError } from "@/components/app/history-error";
-import { LD2450View } from "@/components/radar/ld2450-view";
+import { RadarStage } from "@/components/radar/radar-stage";
+import { MovementHeatmap } from "@/components/analytics/movement-heatmap";
+import { calculateMovementHeatmap, type SensorMountTransform } from "@/lib/analytics";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
@@ -110,9 +112,6 @@ function PlaybackPage() {
   const searchEpoch = search.t ? Number(search.t) : null;
   const { data: rooms = [], isLoading: roomsLoading } = useQuery(roomsQuery);
   const [selectedRoomId, setSelectedRoomId] = useState<string>(search.roomId ?? "");
-  const [showZones, setShowZones] = useState(true);
-  const [showObjects, setShowObjects] = useState(true);
-  const [showTrails, setShowTrails] = useState(true);
   const [selectedTargetId, setSelectedTargetId] = useState<number | null>(searchTargetId);
 
   // Local historical date selection (defaults to search param, or search epoch, or today YYYY-MM-DD)
@@ -359,6 +358,55 @@ function PlaybackPage() {
     return interpolatedFrame.targets.find((t) => t.target_id === selectedTargetId);
   }, [interpolatedFrame.targets, selectedTargetId]);
 
+  // What the shared radar stage draws at the current moment
+  const stageTargets = useMemo(
+    () =>
+      interpolatedFrame.targets.map((t) => ({
+        target_id: t.target_id,
+        x_mm: t.x_mm,
+        y_mm: t.y_mm,
+        speed_cms: t.speed_cms,
+      })),
+    [interpolatedFrame.targets],
+  );
+  const stageTrails = useMemo(() => {
+    const out: Record<number, Array<{ x_mm: number; y_mm: number }>> = {};
+    for (const t of interpolatedFrame.targets) {
+      out[t.target_id] = t.trail.map((p) => ({ x_mm: p.x, y_mm: p.y }));
+    }
+    return out;
+  }, [interpolatedFrame.targets]);
+  const heatmapNode = useMemo(() => {
+    if (!currentRoom || segments.length === 0) {
+      return (
+        <p className="px-6 py-20 text-center text-sm text-slate-500">
+          No stored movement for this day, so there is nothing to map.
+        </p>
+      );
+    }
+    const mount: SensorMountTransform = {
+      mountX_mm: currentRoom.width_mm / 2,
+      mountY_mm: 0,
+      orientationDeg: 0,
+    };
+    const data = calculateMovementHeatmap(
+      segments,
+      currentRoom.width_mm,
+      currentRoom.length_mm,
+      20,
+      mount,
+    );
+    return (
+      <MovementHeatmap
+        heatmapData={data}
+        roomWidthMm={currentRoom.width_mm}
+        roomLengthMm={currentRoom.length_mm}
+        zones={currentRoom.zones ?? []}
+        doors={currentRoom.doors ?? []}
+      />
+    );
+  }, [currentRoom, segments]);
+
   if (!roomsLoading && rooms.length === 0) {
     return (
       <>
@@ -427,139 +475,112 @@ function PlaybackPage() {
             />
           </div>
         </div>
-
-        {/* Display Toggles */}
-        <div className="flex items-center gap-4 text-xs">
-          <div className="flex items-center gap-1.5">
-            <Switch id="pb-trails" checked={showTrails} onCheckedChange={setShowTrails} />
-            <Label htmlFor="pb-trails" className="text-xs cursor-pointer">
-              Trails
-            </Label>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Switch id="pb-zones" checked={showZones} onCheckedChange={setShowZones} />
-            <Label htmlFor="pb-zones" className="text-xs cursor-pointer">
-              Zones
-            </Label>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Switch id="pb-objects" checked={showObjects} onCheckedChange={setShowObjects} />
-            <Label htmlFor="pb-objects" className="text-xs cursor-pointer">
-              Furniture
-            </Label>
-          </div>
-        </div>
       </div>
 
       {/* MAIN PLAYBACK DISPLAY & INSPECTOR */}
       <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
         {/* Map and timeline, one under the other */}
         <div className="min-w-0 space-y-6">
-          <Panel
-            title={<span className="flex items-center gap-2">Route scrubber map</span>}
-            subtitle="Top-down visual route playback with trails, zone collision, and dwell tracking"
-            action={
-              <Pill t={interpolatedFrame.activeCount > 0 ? "success" : "neutral"}>
-                {interpolatedFrame.activeCount} target
-                {interpolatedFrame.activeCount === 1 ? "" : "s"} tracked
-              </Pill>
-            }
-          >
-            {currentRoom ? (
-              <div className="relative">
-                <LD2450View
-                  widthMm={currentRoom.width_mm}
-                  lengthMm={currentRoom.length_mm}
-                  playbackTargets={interpolatedFrame.targets}
-                  selected={selectedTargetId}
-                  onSelect={setSelectedTargetId}
-                  doors={currentRoom.doors}
-                  zones={currentRoom.zones}
-                  objects={currentRoom.objects}
-                  showZones={showZones}
-                  showObjects={showObjects}
-                  showTrails={showTrails}
-                />
-
-                {/* Timestamp overlay */}
-                <div className="absolute left-3 top-3 z-20 flex items-center gap-2 rounded-md bg-card/90 px-2.5 py-1 text-xs font-mono shadow-sm border backdrop-blur">
-                  <Clock className="size-3.5 text-muted-foreground" />
-                  <span>{formatClockTime(currentTime)}</span>
-                  <span className="text-muted-foreground">
-                    ({formatDuration(currentTime - startTime)})
-                  </span>
-                </div>
-
-                {/* Sensor online, but nobody in view: say so, so it is not confused with "no data" */}
-                {!currentGap &&
-                  interpolatedFrame.activeCount === 0 &&
-                  (segments.length > 0 || visibleEvents.length > 0) && (
-                    <div className="absolute left-3 top-12 z-20 rounded-md border bg-card/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
-                      Sensor online · nobody in view
+          {currentRoom ? (
+            <RadarStage
+              room={currentRoom}
+              targets={stageTargets}
+              trails={stageTrails}
+              hub={null}
+              selectedId={selectedTargetId}
+              onSelect={setSelectedTargetId}
+              heatmap={heatmapNode}
+              defaultShow={{ trajectory: true }}
+              headerRight={
+                <Pill t={interpolatedFrame.activeCount > 0 ? "success" : "neutral"}>
+                  {interpolatedFrame.activeCount} target
+                  {interpolatedFrame.activeCount === 1 ? "" : "s"} tracked
+                </Pill>
+              }
+              overlay={
+                <>
+                  {/* Clock, and whether the sensor was watching an empty room */}
+                  <div className="absolute bottom-3 left-3 z-20 flex flex-col items-start gap-1.5">
+                    {!currentGap &&
+                      interpolatedFrame.activeCount === 0 &&
+                      (segments.length > 0 || visibleEvents.length > 0) && (
+                        <div className="rounded-md bg-[#0a1740]/90 px-2 py-0.5 text-[11px] text-sky-100 ring-1 ring-sky-400/30">
+                          Sensor online · nobody in view
+                        </div>
+                      )}
+                    <div className="flex items-center gap-2 rounded-md bg-[#0a1740]/90 px-2.5 py-1 font-mono text-xs text-white ring-1 ring-sky-400/30">
+                      <Clock className="size-3.5 text-sky-300" />
+                      <span>{formatClockTime(currentTime)}</span>
+                      <span className="text-sky-200/70">
+                        ({formatDuration(currentTime - startTime)})
+                      </span>
                     </div>
-                  )}
-
-                {/* NO DATA: the sensor or device was offline, so the room state is unknown */}
-                {currentGap && (
-                  <div
-                    role="status"
-                    className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-lg p-6 text-center"
-                    style={{
-                      backgroundColor: "rgba(15, 23, 42, 0.82)",
-                      backgroundImage:
-                        "repeating-linear-gradient(135deg, rgba(255,255,255,0.06) 0 12px, transparent 12px 24px)",
-                    }}
-                  >
-                    <WifiOff className="size-8 text-rose-300" />
-                    <p className="text-lg font-bold tracking-wide text-white">NO DATA</p>
-                    <p className="text-sm font-medium text-rose-200">
-                      {gapLabel(currentGap)}
-                      {currentGap.ongoing ? " (still offline)" : ""}
-                    </p>
-                    <p className="font-mono text-xs text-slate-300">
-                      {formatClockTime(currentGap.from)} – {formatClockTime(currentGap.to)} ·{" "}
-                      {formatDuration(currentGap.to - currentGap.from)}
-                    </p>
-                    <p className="max-w-xs text-xs text-slate-400">
-                      Nothing was recorded here, so it is not known whether anyone was in the room.
-                      The time still counts on the timeline.
-                    </p>
                   </div>
-                )}
 
-                {currentEvent && (
-                  <div
-                    className={`absolute right-3 top-3 flex max-w-[60%] items-center gap-2 rounded-md px-2.5 py-1 text-xs font-medium shadow-sm ${severityClass(currentEvent.severity, currentEvent.event_type)}`}
-                  >
-                    <AlertTriangle className="size-3.5 shrink-0" />
-                    <span className="truncate">
-                      {eventLabel(currentEvent)}
-                      {currentEvent.zone_name ? ` · ${currentEvent.zone_name}` : ""}
-                    </span>
-                  </div>
-                )}
-
-                {/* Empty state overlay when no trajectories exist for selected date */}
-                {segments.length === 0 &&
-                  events.length === 0 &&
-                  gaps.length === 0 &&
-                  !isLoadingSegments &&
-                  !loadError && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-card/85 backdrop-blur-xs p-6 text-center rounded-lg border">
-                      <Calendar className="size-8 text-muted-foreground mb-2" />
-                      <p className="font-semibold text-sm">
-                        No trajectory records for {selectedDate}
+                  {/* NO DATA: the sensor or device was offline, so the room state is unknown */}
+                  {currentGap && (
+                    <div
+                      role="status"
+                      className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-2xl p-6 text-center"
+                      style={{
+                        backgroundColor: "rgba(15, 23, 42, 0.86)",
+                        backgroundImage:
+                          "repeating-linear-gradient(135deg, rgba(255,255,255,0.06) 0 12px, transparent 12px 24px)",
+                      }}
+                    >
+                      <WifiOff className="size-8 text-rose-300" />
+                      <p className="text-lg font-bold tracking-wide text-white">NO DATA</p>
+                      <p className="text-sm font-medium text-rose-200">
+                        {gapLabel(currentGap)}
+                        {currentGap.ongoing ? " (still offline)" : ""}
                       </p>
-                      <p className="text-xs text-muted-foreground max-w-sm mt-1">
-                        No radar trajectories were stored for this room on this date.
+                      <p className="font-mono text-xs text-slate-300">
+                        {formatClockTime(currentGap.from)} – {formatClockTime(currentGap.to)} ·{" "}
+                        {formatDuration(currentGap.to - currentGap.from)}
+                      </p>
+                      <p className="max-w-xs text-xs text-slate-400">
+                        Nothing was recorded here, so it is not known whether anyone was in the
+                        room. The time still counts on the timeline.
                       </p>
                     </div>
                   )}
-              </div>
-            ) : (
+
+                  {currentEvent && (
+                    <div
+                      className={`absolute left-1/2 top-3 z-20 flex max-w-[55%] -translate-x-1/2 items-center gap-2 rounded-md px-2.5 py-1 text-xs font-medium shadow-sm ${severityClass(currentEvent.severity, currentEvent.event_type)}`}
+                    >
+                      <AlertTriangle className="size-3.5 shrink-0" />
+                      <span className="truncate">
+                        {eventLabel(currentEvent)}
+                        {currentEvent.zone_name ? ` · ${currentEvent.zone_name}` : ""}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Empty state when nothing was stored for the selected date */}
+                  {segments.length === 0 &&
+                    events.length === 0 &&
+                    gaps.length === 0 &&
+                    !isLoadingSegments &&
+                    !loadError && (
+                      <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-2xl bg-[#050b26]/85 p-6 text-center">
+                        <Calendar className="mb-2 size-8 text-sky-300" />
+                        <p className="text-sm font-semibold text-white">
+                          No trajectory records for {selectedDate}
+                        </p>
+                        <p className="mt-1 max-w-sm text-xs text-slate-300">
+                          No radar trajectories were stored for this room on this date.
+                        </p>
+                      </div>
+                    )}
+                </>
+              }
+            />
+          ) : (
+            <Panel>
               <Empty icon={<Calendar className="size-5" />} title="No Room Selected" />
-            )}
-          </Panel>
+            </Panel>
+          )}
 
           {/* TIMELINE SCRUBBER & PLAYBACK CONTROLS */}
           <div className="rounded-xl border bg-card p-5 shadow-card space-y-3">

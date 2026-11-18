@@ -51,7 +51,7 @@ function SettingsPage() {
   const [email, setEmail] = useState("");
   const [created, setCreated] = useState("");
   const [pw, setPw] = useState({ cur: "", next: "" });
-  const [notif, setNotif] = useState({ occupancy: true, sensor: true, sound: false });
+  const [notif, setNotif] = useState({ occupancy: true, sensor: true, sound: true });
 
   useEffect(() => {
     void authClient.getUser().then((user) => {

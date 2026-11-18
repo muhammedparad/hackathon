@@ -34,6 +34,22 @@ export type LiveServerMessage =
       targets: LiveTarget[];
     }
   | {
+      /** An alert the server just raised (zone entry, fall, entry away from an entry point...). Pushed at once. */
+      type: "alert";
+      room_id: string | null;
+      device_id: string;
+      event_type: string;
+      severity: string;
+      description: string;
+      /** ISO 8601, identical to the stored event's timestamp (used to match the two) */
+      timestamp: string;
+      target_id: number;
+      zone_id?: string | null;
+      zone_name?: string | null;
+      x_mm: number;
+      y_mm: number;
+    }
+  | {
       type: "device";
       device_id: string;
       room_id: string | null;

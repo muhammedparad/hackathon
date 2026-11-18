@@ -4,11 +4,29 @@ import type { AlertSeverity, EventType } from "@/lib/radar/types";
 export type PopupLevel = "critical" | "alert";
 
 const ALERT_TYPES = new Set<string>([
-  "restricted_zone_entry",
-  "hazard_zone_entry",
-  "hazard_prolonged_presence",
+  "restricted_zone_presence",
   "unexpected_entry",
   "sensor_disconnected",
+]);
+
+/** Someone in a danger zone, or a possible fall. These get the alarm sound. */
+const DANGER_TYPES = new Set<string>([
+  "hazard_zone_entry",
+  "hazard_prolonged_presence",
+  "restricted_zone_entry",
+  "restricted_zone_presence",
+  "candidate_fall",
+]);
+
+export function isDangerEvent(event: { event_type: EventType | string }): boolean {
+  return DANGER_TYPES.has(event.event_type);
+}
+
+/** Entering a danger zone, or a possible fall, stays on screen until acknowledged. */
+const STICKY_TYPES = new Set<string>([
+  "hazard_zone_entry",
+  "restricted_zone_entry",
+  "candidate_fall",
 ]);
 
 /** Which popup (if any) an event gets. Routine events such as entering through a door stay in the log. */
@@ -16,10 +34,23 @@ export function popupLevel(event: {
   event_type: EventType | string;
   severity?: AlertSeverity | undefined;
 }): PopupLevel | null {
-  if (event.event_type === "candidate_fall" || event.severity === "critical") return "critical";
+  if (STICKY_TYPES.has(event.event_type) || event.severity === "critical") return "critical";
   if (event.severity === "high" || event.severity === "medium") return "alert";
-  if (ALERT_TYPES.has(event.event_type)) return "alert";
+  if (ALERT_TYPES.has(event.event_type) || DANGER_TYPES.has(event.event_type)) return "alert";
   return null;
+}
+
+/**
+ * Identifies one event whether it arrived pushed over the live socket or from the stored copy, so it pops up
+ * (and sounds) once, not twice.
+ */
+export function eventKey(e: {
+  room_id: string | null;
+  event_type: string;
+  timestamp: number;
+  target_id?: number | null | undefined;
+}): string {
+  return `${e.room_id ?? ""}|${e.event_type}|${e.timestamp}|${e.target_id ?? ""}`;
 }
 
 /** Only events that happened after the page opened (minus a short grace) pop up; history does not. */

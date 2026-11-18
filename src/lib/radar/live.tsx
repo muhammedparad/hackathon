@@ -15,6 +15,7 @@ import { connectLive, type LiveConnState } from "@/lib/live/ws-client";
 import { roomsQuery } from "@/lib/data";
 import type { AlertSeverity, EventEvidence, EventType, LD2450Frame, RD61Frame } from "./types";
 import { STALE_AFTER_MS } from "./types";
+import { eventKey } from "@/lib/notify";
 
 export interface RoomLive {
   ld?: LD2450Frame | undefined;
@@ -110,7 +111,14 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const [selectedRoomId, setSelectedRoomIdRaw] = useStored<string | null>("rt.room", null);
   const [frames, setFrames] = useState<Record<string, RoomLive>>({});
-  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
+  const [storedEvents, setLiveEvents] = useState<LiveEvent[]>([]);
+  // Alerts the server pushed over the socket, shown at once; the stored copy replaces them when it arrives.
+  const [pushedEvents, setPushedEvents] = useState<LiveEvent[]>([]);
+  const liveEvents = useMemo(() => {
+    const stored = new Set(storedEvents.map(eventKey));
+    const extra = pushedEvents.filter((e) => !stored.has(eventKey(e)));
+    return [...extra, ...storedEvents].sort((a, b) => b.timestamp - a.timestamp).slice(0, 50);
+  }, [storedEvents, pushedEvents]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
   const [wsState, setWsState] = useState<LiveConnState>("connecting");
   const [now, setNow] = useState(() => Date.now());
@@ -230,6 +238,27 @@ export function LiveProvider({ children }: { children: ReactNode }) {
               },
             },
           }));
+        } else if (m.type === "alert") {
+          if (!m.room_id) return;
+          const ts = Date.parse(m.timestamp);
+          if (!Number.isFinite(ts)) return;
+          const ev: LiveEvent = {
+            id: `push:${m.room_id}:${m.event_type}:${ts}:${m.target_id}`,
+            room_id: m.room_id,
+            event_type: m.event_type as EventType,
+            description: m.description,
+            target_id: m.target_id,
+            sensor_type: "ld2450",
+            timestamp: ts,
+            severity: m.severity as AlertSeverity,
+            zone_id: m.zone_id ?? null,
+            zone_name: m.zone_name ?? null,
+            x_mm: m.x_mm,
+            y_mm: m.y_mm,
+          };
+          setPushedEvents((prev) =>
+            prev.some((p) => p.id === ev.id) ? prev : [ev, ...prev].slice(0, 30),
+          );
         } else if (m.type === "device") {
           qc.setQueryData<Device[]>(["devices"], (prev) =>
             prev?.map((d) => (d.id === m.device_id ? { ...d, last_seen: m.last_seen } : d)),

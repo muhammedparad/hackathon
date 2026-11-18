@@ -4,7 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, Boxes, ShieldAlert, X } from "lucide-react";
 import { devicesQuery, roomsQuery, trajectoriesQuery } from "@/lib/data";
 import { isStale, roomState, useLive, type RoomLive } from "@/lib/radar/live";
-import { deviceConnection, isPointInPolygon, type LD2450Target } from "@/lib/radar/types";
+import {
+  EVENT_LABELS,
+  deviceConnection,
+  isPointInPolygon,
+  type LD2450Target,
+} from "@/lib/radar/types";
+import { isDangerEvent } from "@/lib/notify";
 import { calculateMovementHeatmap, type SensorMountTransform } from "@/lib/analytics";
 import { Empty, timeAgo } from "@/components/app/status";
 import { LiveRadarView, type SignalSample } from "@/components/radar/live-radar-view";
@@ -177,10 +183,7 @@ function LivePage() {
     : null;
 
   const activeAlert = live.liveEvents.find(
-    (e) =>
-      e.room_id === room.id &&
-      (e.event_type === "candidate_fall" || e.event_type === "hazard_zone_entry") &&
-      live.now - e.timestamp < 120_000,
+    (e) => e.room_id === room.id && isDangerEvent(e) && live.now - e.timestamp < 120_000,
   );
 
   const banners = (
@@ -193,9 +196,8 @@ function LivePage() {
           <ShieldAlert className="mt-0.5 size-5 shrink-0 text-rose-600" />
           <div className="text-sm">
             <div className="font-bold">
-              {activeAlert.event_type === "candidate_fall"
-                ? "Possible fall"
-                : "Hazard zone entered"}
+              {EVENT_LABELS[activeAlert.event_type] ?? "Alert"}
+              {activeAlert.zone_name ? ` · ${activeAlert.zone_name}` : ""}
             </div>
             <div>{activeAlert.description}</div>
           </div>

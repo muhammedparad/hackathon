@@ -9,7 +9,8 @@ import { json, type AuthenticatedDevice } from "@/lib/device-auth.server";
 import { getAdminFirestore } from "@/lib/firebase/admin.server";
 import { AlertEngine, type AlertEngineRoom } from "@/lib/radar/alert-engine";
 import type { Firestore } from "firebase-admin/firestore";
-import { publishDeviceSeen, publishLiveFrame } from "@/lib/live/publish.server";
+import { publishDeviceSeen, publishLiveAlert, publishLiveFrame } from "@/lib/live/publish.server";
+import { popupLevel } from "@/lib/notify";
 import { TrajectoryRecorder } from "@/lib/radar/trajectory-recorder";
 import { syncSensorStatus } from "@/lib/sensor-status.server";
 
@@ -264,6 +265,40 @@ export interface ProcessTelemetryOptions {
   storeRaw?: boolean;
 }
 
+/**
+ * Alerts that deserve a popup (zone entries, falls, entries away from an entry point...) go to the owner's open
+ * dashboards the instant the engine raises them, so the sound and the popup do not wait for the database.
+ */
+export function pushAlertsLive(
+  device: AuthenticatedDevice,
+  alerts: Array<{
+    event_type: string;
+    severity: Parameters<typeof popupLevel>[0]["severity"];
+    description: string;
+    timestamp: string;
+    target_id: number;
+    zone_id?: string | undefined;
+    zone_name?: string | undefined;
+    x_mm: number;
+    y_mm: number;
+  }>,
+): void {
+  for (const a of alerts) {
+    if (popupLevel(a) === null) continue;
+    publishLiveAlert(device, {
+      event_type: a.event_type,
+      severity: a.severity ?? "info",
+      description: a.description,
+      timestamp: a.timestamp,
+      target_id: a.target_id,
+      zone_id: a.zone_id ?? null,
+      zone_name: a.zone_name ?? null,
+      x_mm: a.x_mm,
+      y_mm: a.y_mm,
+    });
+  }
+}
+
 /** Push one real frame (or a "sensor disconnected" notice) to the owner's open dashboards. */
 export function publishTelemetryLive(
   device: AuthenticatedDevice,
@@ -421,6 +456,7 @@ export async function processTelemetry(
         const epochMs = new Date(ts).getTime();
         const engine = await getRoomAlertEngine(device.room_id, db);
         const alerts = engine.processTargets(payload.data.targets, epochMs, false, device.id);
+        pushAlertsLive(device, alerts);
 
         if (alerts.length > 0) {
           const alertBatch = db.batch();
@@ -577,6 +613,7 @@ export async function processTelemetry(
         const epochMs = new Date(ts).getTime();
         const engine = await getRoomAlertEngine(device.room_id, null);
         const alerts = engine.processTargets(payload.data.targets, epochMs, false, device.id);
+        pushAlertsLive(device, alerts);
 
         pruneOccupancyCache(now);
         const prevState = lastOccupancyState.get(device.room_id);

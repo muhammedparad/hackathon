@@ -84,7 +84,7 @@ def render(size, maskable=False, ss=3):
     return rows
 
 
-def write_png(path, size, rows):
+def png_bytes(size, rows):
     raw = b"".join(b"\x00" + r for r in rows)
 
     def chunk(tag, data):
@@ -95,8 +95,33 @@ def write_png(path, size, rows):
     png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(raw, 9))
     png += chunk(b"IEND", b"")
+    return png
+
+
+def write_png(path, size, rows):
     with open(path, "wb") as f:
-        f.write(png)
+        f.write(png_bytes(size, rows))
+
+
+def write_ico(path, sizes):
+    """favicon.ico with PNG-encoded images. Small sizes use bolder rings so they stay readable at 16 px."""
+    global HALF_STROKE, DOT_R
+    keep = (HALF_STROKE, DOT_R)
+    images = []
+    for size in sizes:
+        HALF_STROKE, DOT_R = (0.06, 0.105) if size <= 24 else (0.045, 0.085)
+        images.append((size, png_bytes(size, render(size, False, ss=6))))
+    HALF_STROKE, DOT_R = keep
+    head = struct.pack("<HHH", 0, 1, len(images))
+    offset = 6 + 16 * len(images)
+    entries = b""
+    blobs = b""
+    for size, data in images:
+        entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(data), offset)
+        blobs += data
+        offset += len(data)
+    with open(path, "wb") as f:
+        f.write(head + entries + blobs)
 
 
 def main():
@@ -109,6 +134,8 @@ def main():
     ]:
         write_png(os.path.join(OUT, name), size, render(size, maskable, ss=3 if size >= 400 else 4))
         print("wrote", name)
+    write_ico(os.path.join(OUT, "favicon.ico"), [16, 32, 48])
+    print("wrote favicon.ico")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { analyticsEventsQuery, devicesQuery, roomsQuery, trajectoriesQuery } from "@/lib/data";
 import { movementPerHour } from "@/lib/analytics/movement";
+import { isDangerEvent } from "@/lib/notify";
 import { roomState, useLive } from "@/lib/radar/live";
 import { deviceConnection } from "@/lib/radar/types";
 import { isAlertEvent, occupancySessions, occupiedMs } from "@/lib/analytics";
@@ -76,10 +77,7 @@ function Overview() {
         const f = live.frames[r.id];
         const status = roomState(f, live.now);
         const emergency = live.liveEvents.some(
-          (e) =>
-            e.room_id === r.id &&
-            (e.event_type === "candidate_fall" || e.event_type === "hazard_zone_entry") &&
-            live.now - e.timestamp < 180_000,
+          (e) => e.room_id === r.id && isDangerEvent(e) && live.now - e.timestamp < 180_000,
         );
         return {
           id: r.id,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isReminderDue, popupLevel, type Reminder } from "@/lib/notify";
+import { eventKey, isDangerEvent, isReminderDue, popupLevel, type Reminder } from "@/lib/notify";
 
 const reminder = (over: Partial<Reminder> = {}): Reminder => ({
   id: "r1",
@@ -22,9 +22,19 @@ describe("popupLevel", () => {
     );
   });
 
-  it("pops up zone entries and entries away from an entry point", () => {
+  it("keeps a danger-zone entry on screen until acknowledged", () => {
+    expect(popupLevel({ event_type: "hazard_zone_entry", severity: "high" })).toBe("critical");
+    expect(popupLevel({ event_type: "restricted_zone_entry", severity: "critical" })).toBe(
+      "critical",
+    );
+  });
+
+  it("gives the repeat alerts a normal popup, so they do not pile up", () => {
+    expect(popupLevel({ event_type: "restricted_zone_presence", severity: "high" })).toBe("alert");
+  });
+
+  it("pops up entries away from an entry point", () => {
     expect(popupLevel({ event_type: "unexpected_entry", severity: "high" })).toBe("alert");
-    expect(popupLevel({ event_type: "hazard_zone_entry", severity: "info" })).toBe("alert");
     expect(popupLevel({ event_type: "sensor_disconnected", severity: "info" })).toBe("alert");
   });
 
@@ -60,5 +70,40 @@ describe("isReminderDue", () => {
   it("never fires a switched-off or malformed reminder", () => {
     expect(isReminderDue(reminder({ enabled: false }), at("2026-06-01T12:00:00"))).toBe(false);
     expect(isReminderDue(reminder({ time: "9am" }), at("2026-06-01T12:00:00"))).toBe(false);
+  });
+});
+
+describe("isDangerEvent and eventKey", () => {
+  it("sounds the alarm for danger zones and falls only", () => {
+    for (const t of [
+      "hazard_zone_entry",
+      "hazard_prolonged_presence",
+      "restricted_zone_entry",
+      "restricted_zone_presence",
+      "candidate_fall",
+    ]) {
+      expect(isDangerEvent({ event_type: t })).toBe(true);
+    }
+    for (const t of ["door_entry", "unexpected_entry", "room_occupied", "sensor_disconnected"]) {
+      expect(isDangerEvent({ event_type: t })).toBe(false);
+    }
+  });
+
+  it("gives a pushed alert and its stored copy the same key", () => {
+    const iso = "2026-06-01T10:00:01.234Z";
+    const pushed = {
+      room_id: "r1",
+      event_type: "hazard_zone_entry",
+      timestamp: Date.parse(iso),
+      target_id: 2,
+    };
+    const stored = {
+      room_id: "r1",
+      event_type: "hazard_zone_entry",
+      timestamp: new Date(iso).getTime(),
+      target_id: 2,
+    };
+    expect(eventKey(pushed)).toBe(eventKey(stored));
+    expect(eventKey({ ...stored, target_id: 3 })).not.toBe(eventKey(stored));
   });
 });

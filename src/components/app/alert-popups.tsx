@@ -7,36 +7,35 @@ import { roomsQuery } from "@/lib/data";
 import { firebaseDb } from "@/lib/firebase/db";
 import { useLive } from "@/lib/radar/live";
 import { EVENT_LABELS } from "@/lib/radar/types";
-import { POPUP_GRACE_MS, isReminderDue, localDateString, popupLevel } from "@/lib/notify";
+import {
+  POPUP_GRACE_MS,
+  eventKey,
+  isDangerEvent,
+  isReminderDue,
+  localDateString,
+  popupLevel,
+} from "@/lib/notify";
+import { armAlertSound, playAlarm, type AlarmKind } from "@/lib/alert-sound";
 import { remindersQuery, updateReminder } from "@/lib/reminders";
 
+/** Alert sounds are on unless the person switched them off in Settings. */
 function soundEnabled(): boolean {
   try {
-    return Boolean(
-      (JSON.parse(localStorage.getItem("rt.notif") ?? "{}") as { sound?: boolean }).sound,
-    );
+    const saved = JSON.parse(localStorage.getItem("rt.notif") ?? "{}") as { sound?: boolean };
+    return saved.sound !== false;
   } catch {
-    return false;
+    return true;
   }
 }
 
-function beep(urgent: boolean) {
-  try {
-    const Ctx =
-      window.AudioContext ??
-      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = urgent ? 880 : 660;
-    gain.gain.value = 0.08;
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + (urgent ? 0.5 : 0.25));
-    osc.onended = () => void ctx.close();
-  } catch {
-    /* audio is optional */
+let soundHintShown = false;
+/** Plays the alarm; if the browser has not unlocked audio yet, say what to do (once). */
+async function sound(kind: AlarmKind) {
+  if (!soundEnabled()) return;
+  const played = await playAlarm(kind);
+  if (!played && !soundHintShown) {
+    soundHintShown = true;
+    toast.info("Click anywhere on the page once so alert sounds can play", { duration: 8000 });
   }
 }
 
@@ -62,11 +61,13 @@ export function AlertPopups() {
   const { data: rooms = [] } = useQuery(roomsQuery);
   const opened = useRef(Date.now());
   const shown = useRef(new Set<string>());
+  useEffect(() => armAlertSound(), []);
 
   useEffect(() => {
     for (const e of [...live.liveEvents].reverse()) {
-      if (shown.current.has(e.id)) continue;
-      shown.current.add(e.id);
+      const key = eventKey(e); // the same event may arrive pushed and again from storage
+      if (shown.current.has(key)) continue;
+      shown.current.add(key);
       if (e.timestamp < opened.current - POPUP_GRACE_MS) continue;
       const level = popupLevel(e);
       if (!level) continue;
@@ -106,7 +107,7 @@ export function AlertPopups() {
         toast.warning(title, { description, duration: 12_000, action: view });
       }
       desktopNotify(title, description);
-      if (soundEnabled()) beep(level === "critical");
+      void sound(isDangerEvent(e) ? "danger" : "notice");
     }
   }, [live.liveEvents, rooms, navigate, qc]);
 
@@ -131,7 +132,7 @@ export function ReminderTicker() {
           cancel: { label: "Done", onClick: () => undefined },
         });
         desktopNotify("Reminder", r.title);
-        if (soundEnabled()) beep(false);
+        void sound("notice");
         void updateReminder(r.id, {
           last_fired_date: localDateString(now),
           ...(r.repeat === "once" ? { enabled: false } : {}),

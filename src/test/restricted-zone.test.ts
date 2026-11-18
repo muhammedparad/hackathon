@@ -3,6 +3,8 @@ import { AlertEngine, type AlertEngineRoom } from "@/lib/radar/alert-engine";
 import { _resetTelemetryCache, processTelemetry } from "@/lib/device-ingest.server";
 import type { AuthenticatedDevice } from "@/lib/device-auth.server";
 import { popupLevel } from "@/lib/notify";
+import { getLiveHub } from "@/lib/live/hub.server";
+import type { LiveServerMessage } from "@/lib/live/protocol";
 import { fakeDb } from "./fake-firestore";
 
 vi.mock("@/lib/firebase/admin.server", async () => {
@@ -182,5 +184,105 @@ describe("restricted zone alerts (through the real ingest path)", () => {
     expect(types.filter((t) => t === "restricted_zone_entry")).toHaveLength(1);
     expect(types.filter((t) => t === "restricted_zone_presence")).toHaveLength(2);
     expect(types.filter((t) => t === "restricted_zone_exit")).toHaveLength(1);
+  });
+});
+
+describe("danger alerts are pushed to the browser at once", () => {
+  const device: AuthenticatedDevice = {
+    id: "doc-push",
+    user_id: "owner-push",
+    device_id: "push-esp",
+    device_name: "Push hub",
+    room_id: "room-r",
+    status: "connected",
+    last_seen: null,
+  };
+  beforeEach(() => {
+    fakeDb.reset();
+    _resetTelemetryCache();
+    fakeDb.seed("rooms", "room-r", {
+      user_id: "owner-push",
+      name: "Room",
+      width_mm: 5000,
+      length_mm: 6000,
+      doors: [],
+      zones: [zone],
+      objects: [],
+    });
+  });
+
+  it("sends an alert message to the owner, and not to anyone else", async () => {
+    const hub = getLiveHub();
+    const mine: LiveServerMessage[] = [];
+    const other: LiveServerMessage[] = [];
+    hub.add("owner-push", { id: "b-mine", send: (d: string) => void mine.push(JSON.parse(d)) });
+    hub.add("someone-else", { id: "b-other", send: (d: string) => void other.push(JSON.parse(d)) });
+
+    const base = Date.parse("2026-06-01T10:00:00.000Z");
+    const f = (s: number, t: ReturnType<typeof inside> | null) => ({
+      timestamp: new Date(base + s * 1000).toISOString(),
+      device_time_synced: true,
+      data: {
+        sensor_type: "ld2450" as const,
+        sensor_status: "online" as const,
+        targets: t ? [t] : [],
+      },
+    });
+    await processTelemetry(device, f(0, outside()), { publish: false });
+    await processTelemetry(device, f(1, inside()), { publish: false });
+
+    const alerts = mine.filter((m) => m.type === "alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      type: "alert",
+      room_id: "room-r",
+      event_type: "restricted_zone_entry",
+      severity: "critical",
+      zone_name: "Medicine cabinet",
+      target_id: 1,
+    });
+    // the pushed timestamp is the stored event's timestamp, so the two can be matched
+    const stored = fakeDb
+      .all("occupancy_events")
+      .find((e) => e["event_type"] === "restricted_zone_entry");
+    expect((alerts[0] as { timestamp: string }).timestamp).toBe(stored?.["timestamp"]);
+    expect(other.filter((m) => m.type === "alert")).toEqual([]);
+    hub.remove("b-mine");
+    hub.remove("b-other");
+  });
+
+  it("does not push routine events such as a normal entry", async () => {
+    const hub = getLiveHub();
+    const mine: LiveServerMessage[] = [];
+    hub.add("owner-push", { id: "b-mine2", send: (d: string) => void mine.push(JSON.parse(d)) });
+    // a door is the entry; someone appears at it
+    fakeDb.seed("rooms", "room-r", {
+      user_id: "owner-push",
+      name: "Room",
+      width_mm: 5000,
+      length_mm: 6000,
+      doors: [{ id: "d", name: "Door", x_mm: 2500, y_mm: 5900, width_mm: 900, type: "entry" }],
+      zones: [],
+      objects: [],
+    });
+    const base = Date.parse("2026-06-01T10:00:00.000Z");
+    const f = (
+      s: number,
+      t: { target_id: number; x_mm: number; y_mm: number; speed_cms: number } | null,
+    ) => ({
+      timestamp: new Date(base + s * 1000).toISOString(),
+      device_time_synced: true,
+      data: {
+        sensor_type: "ld2450" as const,
+        sensor_status: "online" as const,
+        targets: t ? [t] : [],
+      },
+    });
+    await processTelemetry(device, f(0, null), { publish: false });
+    await processTelemetry(device, f(10, { target_id: 1, x_mm: 0, y_mm: 5500, speed_cms: 20 }), {
+      publish: false,
+    });
+    expect(mine.filter((m) => m.type === "alert")).toEqual([]);
+    hub.remove("b-mine2");
   });
 });

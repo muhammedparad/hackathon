@@ -1,6 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   firebaseDb,
+  explainFirestoreError,
   type Room,
   type Device,
   type Sensor,
@@ -140,13 +141,15 @@ export function analyticsEventsQuery(fromIso: string, roomId?: string) {
               roomId: rId,
               fromIso,
               limitCount: 500,
+              strict: true,
             });
             return res.rows;
           }),
         );
         return allRows.flat().sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-      } catch {
-        return [];
+      } catch (err) {
+        // Not "no data": let the page show why the history could not be read.
+        throw explainFirestoreError(err);
       }
     },
   });

@@ -333,8 +333,9 @@ describe("Phase 3.1: Door Crossing Inward vs Outward Directionality", () => {
     expect(northNormal.ny).toBe(1);
   });
 
-  it("triggers unexpected_entry when a target moves INWARD from the doorway into the room", () => {
+  it("reports a target that appears at an entry doorway as a normal entry, not an alert", () => {
     const engine = new AlertEngine(testRoom);
+    engine.processTargets([], 990_000, false); // sensor already running, room empty
     const t = 1_000_000;
 
     // Target appears near South door (rx = 2500, ry = 5850) -> sensor coords x = 0, y = 5850
@@ -345,11 +346,11 @@ describe("Phase 3.1: Door Crossing Inward vs Outward Directionality", () => {
       false,
     );
 
-    const doorAlert = a1.find((a) => a.event_type === "unexpected_entry");
+    const doorAlert = a1.find((a) => a.event_type === "door_entry");
     expect(doorAlert).toBeDefined();
+    expect(doorAlert?.severity).toBe("info");
     expect(doorAlert?.evidence.door_name).toBe("South Main Door");
-    expect(doorAlert?.evidence_quality).toBe("Moderate Evidence Quality");
-    expect(doorAlert?.evidence.threshold_value).toContain("bottom wall");
+    expect(a1.find((a) => a.event_type === "unexpected_entry")).toBeUndefined();
   });
 
   it("SUPPRESSES unexpected_entry when a target moves OUTWARD towards the exit doorway", () => {
@@ -372,19 +373,20 @@ describe("Phase 3.1: Door Crossing Inward vs Outward Directionality", () => {
     expect(doorAlert).toBeUndefined();
   });
 
-  it("never triggers unexpected_entry for exit-only doors", () => {
+  it("an exit-only door is not an entry point: someone appearing there is an alert", () => {
     const engine = new AlertEngine(testRoom);
+    engine.processTargets([], 990_000, false);
     const t = 1_000_000;
 
-    // Target near North Fire Exit (door.type === "exit")
+    // Target appears at North Fire Exit (door.type === "exit")
     const alerts = engine.processTargets(
       [{ target_id: 3, x_mm: 0, y_mm: 300, speed_cms: 25 }],
       t,
       false,
     );
 
-    const doorAlert = alerts.find((a) => a.event_type === "unexpected_entry");
-    expect(doorAlert).toBeUndefined();
+    expect(alerts.find((a) => a.event_type === "door_entry")).toBeUndefined();
+    expect(alerts.find((a) => a.event_type === "unexpected_entry")).toBeDefined();
   });
 });
 

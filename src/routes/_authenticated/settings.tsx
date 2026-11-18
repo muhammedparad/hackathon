@@ -8,6 +8,7 @@ import { devicesQuery, roomsQuery } from "@/lib/data";
 import { useLive } from "@/lib/radar/live";
 import { STALE_AFTER_MS, HEARTBEAT_TIMEOUT_MS } from "@/lib/radar/types";
 import { PageHeader, Panel, Pill } from "@/components/app/status";
+import { RemindersPanel } from "@/components/app/reminders-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -216,6 +217,38 @@ function SettingsPage() {
               <Switch checked={notif[k]} onCheckedChange={(v) => setN(k, v)} aria-label={t} />
             </div>
           ))}
+        </Panel>
+        <Panel title="Popups & reminders">
+          <div className="flex items-center justify-between gap-4 border-b pb-3 text-sm">
+            <div>
+              <p className="font-medium">Desktop notifications</p>
+              <p className="text-muted-foreground">
+                Also show alerts as system notifications while the app is open in a tab
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={
+                typeof Notification === "undefined" || Notification.permission === "granted"
+              }
+              onClick={() =>
+                void Notification.requestPermission().then((p) =>
+                  p === "granted"
+                    ? toast.success("Desktop notifications on")
+                    : toast.error("Notifications were not allowed in the browser"),
+                )
+              }
+            >
+              {typeof Notification !== "undefined" && Notification.permission === "granted"
+                ? "On"
+                : "Enable"}
+            </Button>
+          </div>
+          <div className="pt-4">
+            <RemindersPanel />
+          </div>
         </Panel>
         <Panel title="Room & device configuration">
           <p className="text-sm text-muted-foreground">

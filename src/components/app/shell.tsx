@@ -19,6 +19,7 @@ import { authClient } from "@/lib/auth";
 import type { AuthUser } from "@/lib/auth/types";
 import { devicesQuery, roomsQuery } from "@/lib/data";
 import { isStale, useLive } from "@/lib/radar/live";
+import { AlertPopups, ReminderTicker } from "@/components/app/alert-popups";
 import { deviceConnection, EVENT_LABELS } from "@/lib/radar/types";
 import { Logo } from "./logo";
 import { EventRow } from "./event-row";
@@ -302,6 +303,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen overflow-x-clip bg-[#F4F7FC] text-slate-800">
       <Sidebar />
+      <AlertPopups />
+      <ReminderTicker />
 
       <div className="min-w-0 lg:pl-[260px]">
         <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/80 pt-[env(safe-area-inset-top)] backdrop-blur-md">

@@ -21,6 +21,18 @@ export const DEFAULT_ALERT_CONFIG = {
   generalProlongedDwellMs: 10 * 60_000,
   /** Door crossing proximity in millimeters (default 600mm) */
   doorProximityMm: 600,
+  /** A new target first seen within this distance of an entry point counts as entering through it */
+  entryPointRadiusMm: 1500,
+  /** A new target near where a track was lost this recently (ms) is the same person re-acquired, not an entry */
+  reacquireWindowMs: 20_000,
+  /** ...and within this distance (mm) of the lost position, or of any live track */
+  reacquireRadiusMm: 1200,
+  /** No entry decisions this long after the engine starts or the sensor was silent (people already inside) */
+  entryWarmupMs: 3_000,
+  /** A silence longer than this restarts the warm-up */
+  entrySilenceGapMs: 30_000,
+  /** Target vanishing this soon after an abrupt-motion spike, away from any door, is a fall candidate */
+  fallVanishWindowMs: 8_000,
   /** Door unexpected entry speed threshold in cm/s */
   doorEntrySpeedCms: 15,
   /** Door inward normal displacement threshold in mm */
@@ -90,6 +102,8 @@ export interface TargetTrackingState {
 
   // Door proximity tracking
   lastUnexpectedEntryTime: number;
+  // True when present as the engine started or the sensor resumed; entry rules do not apply to these tracks
+  baseline?: boolean | undefined;
 
   // Motion history for pacing & fall detection (last 6 seconds)
   history: Array<{ x: number; y: number; s: number; t: number; z?: number | undefined }>;
@@ -236,6 +250,9 @@ export function getInwardNormal(wall: "top" | "bottom" | "left" | "right"): {
  */
 export class AlertEngine {
   private targets = new Map<string, TargetTrackingState>();
+  private lastProcessedAt = 0;
+  private baselineUntil = 0;
+  private recentLosses: Array<{ x: number; y: number; t: number }> = [];
   public routines: ExpectedRoutine[] = [];
 
   constructor(
@@ -270,6 +287,16 @@ export class AlertEngine {
   ): DetectedAlert[] {
     const alerts: DetectedAlert[] = [];
     const activeKeys = new Set<string>();
+    if (
+      this.lastProcessedAt === 0 ||
+      timestamp - this.lastProcessedAt > this.config.entrySilenceGapMs
+    ) {
+      this.baselineUntil = timestamp + this.config.entryWarmupMs;
+    }
+    this.lastProcessedAt = timestamp;
+    this.recentLosses = this.recentLosses.filter(
+      (l) => timestamp - l.t <= this.config.reacquireWindowMs,
+    );
     const zones = this.room.zones ?? [];
     const doors = this.room.doors ?? [];
     const objects = this.room.objects ?? [];
@@ -280,6 +307,7 @@ export class AlertEngine {
       activeKeys.add(targetKey);
       const sensorType = obs.sensor_type ?? "ld2450";
       let state = this.targets.get(targetKey);
+      const isNewTrack = !state;
 
       if (!state) {
         state = {
@@ -305,6 +333,7 @@ export class AlertEngine {
           fallAlertEmitted: false,
           lastPacingAlertTime: 0,
           routineAlerted: new Map(),
+          baseline: timestamp < this.baselineUntil,
         };
         this.targets.set(targetKey, state);
       } else {
@@ -329,8 +358,8 @@ export class AlertEngine {
       // 1. Evaluate Zone Collisions (Restricted & Hazard)
       this.evaluateZones(state, rx, ry, zones, timestamp, simulated, alerts);
 
-      // 2. Evaluate Entrance / Door Crossings
-      this.evaluateDoors(state, rx, ry, doors, timestamp, simulated, alerts);
+      // 2. Entry points: a new person must appear at an entry point; anywhere else is an alert
+      if (isNewTrack) this.evaluateEntry(state, rx, ry, doors, timestamp, simulated, alerts);
 
       // 3. Evaluate Unusual Movement (Pacing / Prolonged non-hazard stay)
       this.evaluateUnusualMovement(state, rx, ry, zones, timestamp, simulated, alerts);
@@ -545,8 +574,16 @@ export class AlertEngine {
     }
   }
 
-  /* ------------------- Rule 3: Unexpected Entry Detection ------------------- */
-  private evaluateDoors(
+  /* ------------------- Rule 3: Entry points ------------------- */
+  /**
+   * Called once, when a new track appears. Doors marked "entry" or "both" are the legitimate ways in:
+   *  - first seen near one: info event "Entry through <door>" (shows up in Playback)
+   *  - first seen anywhere else: alert "Entry away from an entry point"
+   * Not judged: no entry point configured, people already inside when the engine started or the sensor
+   * resumed (baseline), and a track that is the same person re-acquired (another live track, or a track lost a
+   * moment ago, within reacquireRadiusMm), because the LD2450 drops and re-finds still people.
+   */
+  private evaluateEntry(
     state: TargetTrackingState,
     rx: number,
     ry: number,
@@ -555,85 +592,84 @@ export class AlertEngine {
     simulated: boolean,
     alerts: DetectedAlert[],
   ) {
-    if (doors.length === 0) return;
-    if (timestamp - state.lastUnexpectedEntryTime < 15_000) return; // 15s suppression window
+    const entryDoors = doors.filter((d) => d.type === "entry" || d.type === "both");
+    if (entryDoors.length === 0 || state.baseline) return;
 
-    for (const door of doors) {
-      if (door.type !== "entry" && door.type !== "both") continue;
+    const reacquired =
+      this.recentLosses.some(
+        (l) => Math.hypot(rx - l.x, ry - l.y) <= this.config.reacquireRadiusMm,
+      ) ||
+      [...this.targets.values()].some((o) => {
+        if (o === state) return false;
+        const p = toRoomCoords(o.x_mm, o.y_mm, this.room.width_mm);
+        return Math.hypot(rx - p.rx, ry - p.ry) <= this.config.reacquireRadiusMm;
+      });
+    if (reacquired) return;
 
+    let nearest: { door: Door; dist: number } | null = null;
+    for (const door of entryDoors) {
       const dist = Math.hypot(rx - door.x_mm, ry - door.y_mm);
-      const isNearDoor = dist <= this.config.doorProximityMm;
-      if (!isNearDoor) continue;
+      if (!nearest || dist < nearest.dist) nearest = { door, dist };
+    }
+    if (!nearest) return;
+    const coordinates = { x_mm: state.x_mm, y_mm: state.y_mm, z_mm: state.z_mm };
+    const base = {
+      room_id: this.room.id,
+      target_id: state.targetId,
+      device_id: state.deviceId,
+      sensor_type: state.sensorType,
+      simulated,
+      timestamp: new Date(timestamp).toISOString(),
+      ...coordinates,
+    };
 
-      // Determine doorway wall & inward normal vector
-      const wall = resolveDoorWall(door, this.room.width_mm, this.room.length_mm);
-      const normal = getInwardNormal(wall);
-
-      // Compute motion vector from tracking history
-      let inwardDisplacement = 0;
-      let isOutward = false;
-
-      if (state.history.length >= 2) {
-        // Compare current position to historical position 400-2000ms ago
-        const pastPoint =
-          state.history.find((h) => timestamp - h.t >= 400 && timestamp - h.t <= 2000) ??
-          state.history[0]!;
-        const dx = rx - pastPoint.x;
-        const dy = ry - pastPoint.y;
-        inwardDisplacement = dx * normal.nx + dy * normal.ny;
-
-        // If target is moving strongly outward towards the exit/doorway, suppress unexpected entry
-        if (inwardDisplacement < -30) {
-          isOutward = true;
-        }
-      }
-
-      if (isOutward) {
-        // Target is exiting the room through the doorway, not entering
-        continue;
-      }
-
-      // First detection near door or moving inward from doorway
-      const isEntering =
-        (timestamp - state.firstSeen <= 1_500 && inwardDisplacement >= -15) ||
-        inwardDisplacement >= this.config.doorInwardThresholdMm ||
-        (Math.abs(state.speed_cms) >= this.config.doorEntrySpeedCms && inwardDisplacement >= 0);
-
-      if (isEntering) {
-        state.lastUnexpectedEntryTime = timestamp;
-        alerts.push({
-          room_id: this.room.id,
-          event_type: "unexpected_entry",
-          severity: "medium",
-          description: `Unrecognized movement entering through ${door.name}`,
-          target_id: state.targetId,
-          device_id: state.deviceId,
-          sensor_type: state.sensorType,
-          simulated,
-          timestamp: new Date(timestamp).toISOString(),
-          x_mm: state.x_mm,
-          y_mm: state.y_mm,
-          z_mm: state.z_mm,
+    if (nearest.dist <= this.config.entryPointRadiusMm) {
+      alerts.push({
+        ...base,
+        event_type: "door_entry",
+        severity: "info",
+        description: `Target #${state.targetId} entered through ${nearest.door.name}`,
+        confidence: "medium",
+        evidence_quality: "Moderate Evidence Quality",
+        evidence: {
+          rule_id: "door_entry",
+          summary: `A new target appeared ${Math.round(nearest.dist)}mm from entry point '${nearest.door.name}'.`,
+          measured_value: `Distance to ${nearest.door.name}: ${Math.round(nearest.dist)}mm`,
+          threshold_value: `Within ${this.config.entryPointRadiusMm}mm of an entry point`,
+          coordinates,
+          door_id: nearest.door.id,
+          door_name: nearest.door.name,
           confidence: "medium",
           evidence_quality: "Moderate Evidence Quality",
-          evidence: {
-            rule_id: "unexpected_entry",
-            summary: `Unrecognized movement observed entering inward through monitored entrance '${door.name}' at (${state.x_mm}, ${state.y_mm}) mm.`,
-            measured_value: `Distance to door: ${Math.round(dist)}mm, Inward displacement: ${Math.round(inwardDisplacement)}mm, Speed: ${Math.round(state.speed_cms)} cm/s`,
-            threshold_value: `Proximity <= ${this.config.doorProximityMm}mm, Direction: Inward (${wall} wall)`,
-            coordinates: { x_mm: state.x_mm, y_mm: state.y_mm, z_mm: state.z_mm },
-            door_id: door.id,
-            door_name: door.name,
-            confidence: "medium",
-            evidence_quality: "Moderate Evidence Quality",
-            confidence_score: 0.82,
-            limitations:
-              "Anonymous radar detection. Identity is unverified; reflects physical motion only.",
-          },
-        });
-        break;
-      }
+          confidence_score: 0.8,
+        },
+      });
+      return;
     }
+
+    state.lastUnexpectedEntryTime = timestamp;
+    alerts.push({
+      ...base,
+      event_type: "unexpected_entry",
+      severity: "high",
+      description: `Target #${state.targetId} appeared away from any entry point (nearest: ${nearest.door.name}, ${(nearest.dist / 1000).toFixed(1)} m)`,
+      confidence: "medium",
+      evidence_quality: "Moderate Evidence Quality",
+      evidence: {
+        rule_id: "unexpected_entry",
+        summary: `A new target first appeared at (${state.x_mm}, ${state.y_mm}) mm, ${Math.round(nearest.dist)}mm from the nearest entry point '${nearest.door.name}'. People normally enter through an entry point.`,
+        measured_value: `Distance to nearest entry point: ${Math.round(nearest.dist)}mm`,
+        threshold_value: `Entry points: within ${this.config.entryPointRadiusMm}mm`,
+        coordinates,
+        door_id: nearest.door.id,
+        door_name: nearest.door.name,
+        confidence: "medium",
+        evidence_quality: "Moderate Evidence Quality",
+        confidence_score: 0.7,
+        limitations:
+          "Anonymous radar detection. A person who stood still may have dropped out of tracking and been re-detected; the sensor cannot see through walls or around furniture.",
+      },
+    });
   }
 
   /* ------------------- Rule 4: Unusual Movement Detection ------------------- */
@@ -1035,11 +1071,65 @@ export class AlertEngine {
               });
             }
           }
+          // Remember where it was lost, so a quick re-detection nearby is not mistaken for a new entry
+          const lost = toRoomCoords(state.x_mm, state.y_mm, this.room.width_mm);
+          this.recentLosses.push({ x: lost.rx, y: lost.ry, t: timestamp });
+          this.evaluateVanishedAfterSpike(state, lost.rx, lost.ry, timestamp, simulated, alerts);
           // Remove target from active state
           this.targets.delete(targetKey);
         }
       }
     }
+  }
+
+  /**
+   * A target that disappears right after abrupt motion, on open floor and away from any door, may have fallen
+   * (a still person on the floor can drop out of the LD2450's tracking). Experimental, low confidence.
+   */
+  private evaluateVanishedAfterSpike(
+    state: TargetTrackingState,
+    rx: number,
+    ry: number,
+    timestamp: number,
+    simulated: boolean,
+    alerts: DetectedAlert[],
+  ) {
+    if (state.fallAlertEmitted || state.spikeTime === null || state.spikeSpeed === null) return;
+    if (state.lastSeen - state.spikeTime > this.config.fallVanishWindowMs) return;
+    const doors = this.room.doors ?? [];
+    if (doors.some((d) => Math.hypot(rx - d.x_mm, ry - d.y_mm) <= this.config.entryPointRadiusMm)) {
+      return; // left through a door
+    }
+    if (isTargetOnRestingFurniture(rx, ry, this.room.objects ?? [], this.room.zones ?? [])) return;
+    state.fallAlertEmitted = true;
+    const spike = state.spikeSpeed;
+    const coordinates = { x_mm: state.x_mm, y_mm: state.y_mm, z_mm: state.z_mm };
+    alerts.push({
+      room_id: this.room.id,
+      event_type: "candidate_fall",
+      severity: "critical",
+      description: `Possible fall — experimental: Target #${state.targetId} vanished on open floor after abrupt motion`,
+      target_id: state.targetId,
+      device_id: state.deviceId,
+      sensor_type: state.sensorType,
+      simulated,
+      timestamp: new Date(timestamp).toISOString(),
+      ...coordinates,
+      confidence: "low",
+      evidence_quality: "Screening Heuristic — Experimental",
+      evidence: {
+        rule_id: "candidate_fall_vanished",
+        summary: `Target moved abruptly (${spike} cm/s) and then dropped out of tracking at (${state.x_mm}, ${state.y_mm}) mm, away from any door or bed/sofa.`,
+        measured_value: `Pre-impact spike: ${spike} cm/s, then lost`,
+        threshold_value: `Spike >= ${this.config.fallVelocitySpikeThresholdCms} cm/s, lost within ${Math.round(this.config.fallVanishWindowMs / 1000)}s`,
+        coordinates,
+        confidence: "low",
+        evidence_quality: "Screening Heuristic — Experimental",
+        confidence_score: 0.5,
+        limitations:
+          "Experimental screening heuristic, not a certified alarm. A person standing still can also drop out of tracking. The LD2450 has no height, so posture cannot be verified.",
+      },
+    });
   }
 
   /** Returns whether the engine currently maintains any active target tracks */

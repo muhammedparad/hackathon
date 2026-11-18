@@ -272,27 +272,139 @@ describe("Phase 3: Explainable Alerts & Hazard Detection Engine", () => {
     expect(reappearAlerts.filter((a) => a.event_type === "restricted_zone_entry")).toHaveLength(1);
   });
 
-  // 8. Unexpected entry triggered when new target appears within door boundary
-  it("Criterion 8: detects unexpected_entry with neutral phrasing when target appears at door", () => {
+  // 8. Entry points: a new person should appear at an entry point; anywhere else is an alert.
+  describe("Criterion 8: entry points", () => {
+    // Main Entryway is at room (4500, 5800). Sensor coords: x = rx - 2500, y = ry.
+    const primed = () => {
+      const engine = new AlertEngine(testRoom);
+      const t0 = 1_000_000;
+      engine.processTargets([], t0, false); // sensor running, room empty
+      return { engine, t: t0 + 10_000 };
+    };
+
+    it("reports an entry through an entry point as an info event", () => {
+      const { engine, t } = primed();
+      const alerts = engine.processTargets(
+        [{ target_id: 5, x_mm: 2000, y_mm: 5750, speed_cms: 30 }],
+        t,
+        false,
+      );
+      const entry = alerts.find((a) => a.event_type === "door_entry");
+      expect(entry).toBeDefined();
+      expect(entry?.severity).toBe("info");
+      expect(entry?.evidence.door_name).toBe("Main Entryway");
+      expect(alerts.find((a) => a.event_type === "unexpected_entry")).toBeUndefined();
+    });
+
+    it("alerts when someone first appears away from every entry point", () => {
+      const { engine, t } = primed();
+      const alerts = engine.processTargets(
+        [{ target_id: 6, x_mm: -1500, y_mm: 1500, speed_cms: 20 }],
+        t,
+        false,
+      );
+      const bad = alerts.find((a) => a.event_type === "unexpected_entry");
+      expect(bad).toBeDefined();
+      expect(bad?.severity).toBe("high");
+      expect(bad?.description).toContain("away from any entry point");
+      expect(bad?.evidence.door_name).toBe("Main Entryway");
+    });
+
+    it("does not judge people already inside when the engine starts", () => {
+      const engine = new AlertEngine(testRoom);
+      const alerts = engine.processTargets(
+        [{ target_id: 1, x_mm: -1500, y_mm: 1500, speed_cms: 0 }],
+        1_000_000,
+        false,
+      );
+      expect(alerts.filter((a) => a.event_type === "unexpected_entry")).toHaveLength(0);
+    });
+
+    it("does not judge people present when the sensor resumes after a long silence", () => {
+      const { engine, t } = primed();
+      engine.processTargets([], t + 120_000, false); // silent for 2 minutes, then back
+      const alerts = engine.processTargets(
+        [{ target_id: 2, x_mm: -1500, y_mm: 1500, speed_cms: 0 }],
+        t + 121_000,
+        false,
+      );
+      expect(alerts.filter((a) => a.event_type === "unexpected_entry")).toHaveLength(0);
+    });
+
+    it("treats a track re-found where one was just lost as the same person", () => {
+      const { engine, t } = primed();
+      // enters properly, wanders to the middle, goes still and drops out of tracking
+      engine.processTargets([{ target_id: 1, x_mm: 2000, y_mm: 5750, speed_cms: 30 }], t, false);
+      engine.processTargets(
+        [{ target_id: 1, x_mm: 0, y_mm: 3000, speed_cms: 10 }],
+        t + 1000,
+        false,
+      );
+      engine.processTargets([], t + 5000, false); // lost (stale)
+      const alerts = engine.processTargets(
+        [{ target_id: 2, x_mm: 100, y_mm: 3100, speed_cms: 5 }],
+        t + 6000,
+        false,
+      );
+      expect(alerts.filter((a) => a.event_type === "unexpected_entry")).toHaveLength(0);
+    });
+
+    it("ignores a split track next to someone already in the room", () => {
+      const { engine, t } = primed();
+      engine.processTargets([{ target_id: 1, x_mm: 2000, y_mm: 5750, speed_cms: 30 }], t, false);
+      const alerts = engine.processTargets(
+        [
+          { target_id: 1, x_mm: 0, y_mm: 3000, speed_cms: 10 },
+          { target_id: 2, x_mm: 200, y_mm: 3200, speed_cms: 10 },
+        ],
+        t + 1000,
+        false,
+      );
+      expect(alerts.filter((a) => a.event_type === "unexpected_entry")).toHaveLength(0);
+    });
+
+    it("makes no entry judgement when the room has no entry point configured", () => {
+      const engine = new AlertEngine({ ...testRoom, doors: [] });
+      engine.processTargets([], 1_000_000, false);
+      const alerts = engine.processTargets(
+        [{ target_id: 1, x_mm: -1500, y_mm: 1500, speed_cms: 20 }],
+        1_010_000,
+        false,
+      );
+      expect(alerts.filter((a) => a.event_type === "unexpected_entry")).toHaveLength(0);
+      expect(alerts.filter((a) => a.event_type === "door_entry")).toHaveLength(0);
+    });
+  });
+
+  // 8b. Fall candidate: abrupt motion, then the target drops out of tracking on open floor
+  it("Criterion 8b: flags a target that vanishes on open floor right after abrupt motion", () => {
     const engine = new AlertEngine(testRoom);
-    const t = 1_000_000;
-
-    // Door is at rx = 4500, ry = 5800.
-    // In sensor coords: cx = 2500 -> x = 2000, y = 5750.
-    // Target appears with moving speed (30 cm/s)
-    const alerts = engine.processTargets(
-      [{ target_id: 5, x_mm: 2000, y_mm: 5750, speed_cms: 30 }],
-      t,
-      true,
+    const t = 2_000_000;
+    // open floor away from doors, bed and couch
+    engine.processTargets([{ target_id: 1, x_mm: -1500, y_mm: 3600, speed_cms: 40 }], t, false);
+    engine.processTargets(
+      [{ target_id: 1, x_mm: -1500, y_mm: 3600, speed_cms: 150 }],
+      t + 500,
+      false,
     );
+    const alerts = engine.processTargets([], t + 4000, false);
+    const fall = alerts.find((a) => a.event_type === "candidate_fall");
+    expect(fall).toBeDefined();
+    expect(fall?.evidence_quality).toContain("Experimental");
+    expect(fall?.confidence).toBe("low");
+  });
 
-    const doorAlert = alerts.find((a) => a.event_type === "unexpected_entry");
-    expect(doorAlert).toBeDefined();
-    expect(doorAlert?.evidence.door_name).toBe("Main Entryway");
-    // Verify neutral, objective phrasing per requirements
-    expect(doorAlert?.description).toContain(
-      "Unrecognized movement entering through Main Entryway",
+  it("Criterion 8c: a target that runs out through a door is not a fall candidate", () => {
+    const engine = new AlertEngine(testRoom);
+    const t = 2_000_000;
+    engine.processTargets([{ target_id: 1, x_mm: 1800, y_mm: 5000, speed_cms: 40 }], t, false);
+    engine.processTargets(
+      [{ target_id: 1, x_mm: 2000, y_mm: 5750, speed_cms: 150 }],
+      t + 500,
+      false,
     );
+    const alerts = engine.processTargets([], t + 4000, false);
+    expect(alerts.find((a) => a.event_type === "candidate_fall")).toBeUndefined();
   });
 
   // 9. Unusual movement (pacing) detected on repeated direction reversals

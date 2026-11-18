@@ -301,6 +301,24 @@ function RoomsPage() {
   );
 }
 
+/** Bounding rectangle of a zone polygon (zones created here are rectangles). */
+function zoneRect(z: RoomZone): { x: number; y: number; w: number; l: number } {
+  const xs = z.polygon.map((p) => p.x_mm);
+  const ys = z.polygon.map((p) => p.y_mm);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, l: Math.max(...ys) - y };
+}
+
+function rectPolygon(x: number, y: number, w: number, l: number): RoomZone["polygon"] {
+  return [
+    { x_mm: x, y_mm: y },
+    { x_mm: x + w, y_mm: y },
+    { x_mm: x + w, y_mm: y + l },
+    { x_mm: x, y_mm: y + l },
+  ];
+}
+
 function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: () => void }) {
   const { save } = useRoomMutations();
   const [err, setErr] = useState<string | null>(null);
@@ -338,7 +356,7 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
       x_mm: Math.round(widthMm * 0.8),
       y_mm: Math.round(lengthMm * 0.95),
       width_mm: 900,
-      type: "both",
+      type: "entry",
     };
     setDoors([...doors, newDoor]);
   };
@@ -363,7 +381,11 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
           ? "Hazard Zone"
           : type === "restricted"
             ? "Restricted Area"
-            : "Lounge Zone",
+            : type === "bed"
+              ? "Bed"
+              : type === "sofa"
+                ? "Sofa"
+                : "Zone",
       type,
       polygon: [
         { x_mm: startX, y_mm: startY },
@@ -382,6 +404,27 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
 
   const updateZone = (id: string, updates: Partial<RoomZone>) => {
     setZones(zones.map((z) => (z.id === id ? { ...z, ...updates } : z)));
+  };
+
+  /** Move or resize a rectangular zone, keeping it inside the room. */
+  const setZoneRect = (
+    id: string,
+    patch: Partial<{ x: number; y: number; w: number; l: number }>,
+  ) => {
+    setZones(
+      zones.map((z) => {
+        if (z.id !== id) return z;
+        const r = { ...zoneRect(z), ...patch };
+        const w = Math.max(200, Math.min(widthMm, r.w));
+        const l = Math.max(200, Math.min(lengthMm, r.l));
+        const x = Math.max(0, Math.min(widthMm - w, r.x));
+        const y = Math.max(0, Math.min(lengthMm - l, r.y));
+        return {
+          ...z,
+          polygon: rectPolygon(Math.round(x), Math.round(y), Math.round(w), Math.round(l)),
+        };
+      }),
+    );
   };
 
   const addObject = (type: RoomObject["type"] = "couch") => {
@@ -452,6 +495,15 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          <LD2450View
+            compact
+            widthMm={widthMm}
+            lengthMm={lengthMm}
+            doors={doors}
+            zones={zones}
+            objects={objects}
+            showTrails={false}
+          />
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid grid-cols-4 w-full">
               <TabsTrigger value="general">
@@ -534,8 +586,9 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
             <TabsContent value="doors" className="space-y-3 pt-2">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">
-                  Configured entry and exit doorways. They are used to tell a person entering or
-                  leaving the room from one just walking past.
+                  Mark where people normally come in. Someone who first appears anywhere other than
+                  an entry point raises an "Entry away from an entry point" alert; coming in through
+                  one is only logged (and labelled in Playback).
                 </p>
                 <Button type="button" size="sm" variant="outline" onClick={addDoor}>
                   <Plus className="size-3.5 mr-1" /> Add Door
@@ -612,6 +665,22 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
                           />
                         </div>
                       </div>
+                      <div className="max-w-xs">
+                        <Label className="text-[10px]">Used as</Label>
+                        <Select
+                          value={door.type}
+                          onValueChange={(v: Door["type"]) => updateDoor(door.id, { type: v })}
+                        >
+                          <SelectTrigger className="h-7 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="entry">Entry point</SelectItem>
+                            <SelectItem value="both">Entry and exit</SelectItem>
+                            <SelectItem value="exit">Exit only (not an entry point)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -622,8 +691,10 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
             <TabsContent value="zones" className="space-y-3 pt-2">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">
-                  Hazard and restricted zones trigger explainable notifications when residents cross
-                  boundary lines.
+                  Draw a zone by giving its position and size (the preview above updates as you
+                  type). With "Alert on entry" on, a popup and an event are raised when someone
+                  steps into it; bed and sofa zones are where lying still is normal, so they never
+                  count as a fall.
                 </p>
                 <div className="flex gap-1.5">
                   <Button
@@ -634,8 +705,16 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
                   >
                     <AlertTriangle className="size-3.5 mr-1 text-destructive" /> + Hazard Zone
                   </Button>
-                  <Button type="button" size="sm" variant="outline" onClick={() => addZone("sofa")}>
-                    <Plus className="size-3.5 mr-1" /> + Zone
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => addZone("restricted")}
+                  >
+                    <ShieldAlert className="size-3.5 mr-1 text-destructive" /> + Restricted
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => addZone("bed")}>
+                    <Plus className="size-3.5 mr-1" /> + Bed / Sofa
                   </Button>
                 </div>
               </div>
@@ -721,6 +800,28 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
                             }
                           />
                         </div>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2">
+                        {(
+                          [
+                            ["x", "X from left (mm)"],
+                            ["y", "Y from sensor wall (mm)"],
+                            ["w", "Width (mm)"],
+                            ["l", "Length (mm)"],
+                          ] as const
+                        ).map(([k, label]) => (
+                          <div key={k}>
+                            <Label className="text-[10px]">{label}</Label>
+                            <Input
+                              className="h-7 text-xs"
+                              type="number"
+                              value={zoneRect(zone)[k]}
+                              onChange={(e) =>
+                                setZoneRect(zone.id, { [k]: Number(e.target.value) })
+                              }
+                            />
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}

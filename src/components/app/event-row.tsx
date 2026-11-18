@@ -38,6 +38,7 @@ const MAP: Record<EventType, { icon: LucideIcon; chip: string }> = {
     chip: "bg-destructive/25 text-destructive font-bold",
   },
   unexpected_entry: { icon: UserX, chip: "bg-amber-500/15 text-amber-600" },
+  door_entry: { icon: DoorOpen, chip: "bg-success/10 text-success" },
   unusual_movement: { icon: Activity, chip: "bg-yellow-500/15 text-yellow-600" },
   prolonged_presence: { icon: Clock, chip: "bg-purple-500/15 text-purple-600" },
   routine_deviation: { icon: Shuffle, chip: "bg-indigo-500/15 text-indigo-600" },

@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { HistoryError } from "@/components/app/history-error";
 import { analyticsEventsQuery, roomsQuery, trajectoriesQuery, type Room } from "@/lib/data";
 import {
   calculateActivitySummary,
@@ -412,6 +413,8 @@ function AnalyticsPage() {
             <Skeleton key={i} className="h-32 rounded-xl" />
           ))}
         </div>
+      ) : eventsQuery.isError || trajectoriesQ.isError ? (
+        <HistoryError error={eventsQuery.error ?? trajectoriesQ.error} />
       ) : !analytics.hasData ? (
         <Panel>
           <Empty

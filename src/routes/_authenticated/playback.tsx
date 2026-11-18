@@ -17,10 +17,12 @@ import {
   Trash2,
 } from "lucide-react";
 import { roomsQuery, type Room } from "@/lib/data";
-import { firebaseDb } from "@/lib/firebase/db";
+import { firebaseDb, type OccupancyEvent } from "@/lib/firebase/db";
+import { EVENT_LABELS, type AlertSeverity, type EventType } from "@/lib/radar/types";
 import { interpolateTargetsAtTime, type InterpolatedFrame } from "@/lib/radar/playback-engine";
 import type { TrajectorySegment } from "@/lib/radar/types";
 import { Empty, PageHeader, Panel, Pill } from "@/components/app/status";
+import { HistoryError } from "@/components/app/history-error";
 import { LD2450View } from "@/components/radar/ld2450-view";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,6 +78,30 @@ function formatClockTime(epochMs: number): string {
   return d.toTimeString().split(" ")[0] ?? "--:--:--";
 }
 
+/** Colour of an event marker / chip by how serious it is. */
+function severityClass(severity: AlertSeverity | undefined, type: string): string {
+  if (type === "door_entry") return "bg-success text-success-foreground";
+  switch (severity) {
+    case "critical":
+      return "bg-destructive text-destructive-foreground";
+    case "high":
+      return "bg-orange-500 text-white";
+    case "medium":
+      return "bg-amber-500 text-white";
+    case "low":
+      return "bg-yellow-500 text-black";
+    default:
+      return "bg-muted-foreground/70 text-background";
+  }
+}
+
+function eventLabel(e: OccupancyEvent): string {
+  return EVENT_LABELS[e.event_type as EventType] ?? e.event_type.replace(/_/g, " ");
+}
+
+/** An event is "current" while playback is within this many ms of it. */
+const EVENT_NOW_WINDOW_MS = 4000;
+
 function PlaybackPage() {
   const search = Route.useSearch();
   const searchTargetId = search.targetId ? Number(search.targetId) : null;
@@ -126,6 +152,8 @@ function PlaybackPage() {
   // Playback engine states
   const [segments, setSegments] = useState<TrajectorySegment[]>([]);
   const [isLoadingSegments, setIsLoadingSegments] = useState(false);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [events, setEvents] = useState<Array<OccupancyEvent & { epoch: number }>>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState<number>(1);
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -144,7 +172,7 @@ function PlaybackPage() {
 
   // Calculate timeline start and end
   const { startTime, endTime, totalDurationMs } = useMemo(() => {
-    if (segments.length === 0) {
+    if (segments.length === 0 && events.length === 0) {
       return { startTime: 0, endTime: 0, totalDurationMs: 0 };
     }
     let min = Infinity;
@@ -153,38 +181,59 @@ function PlaybackPage() {
       if (s.start_epoch < min) min = s.start_epoch;
       if (s.end_epoch > max) max = s.end_epoch;
     }
+    for (const e of events) {
+      if (e.epoch < min) min = e.epoch;
+      if (e.epoch > max) max = e.epoch;
+    }
     return {
       startTime: min,
       endTime: max,
       totalDurationMs: Math.max(0, max - min),
     };
-  }, [segments]);
+  }, [segments, events]);
 
   // Load trajectory segments from Firestore / cache
   const loadTrajectories = useCallback(async () => {
     if (!currentRoom) return;
     setIsLoadingSegments(true);
+    setLoadError(null);
     try {
-      const loaded = await firebaseDb.getTrajectorySegments({
-        roomId: currentRoom.id,
-        fromIso,
-        toIso,
-        limitCount: 500,
-      });
+      const [loaded, eventRes] = await Promise.all([
+        firebaseDb.getTrajectorySegments({
+          roomId: currentRoom.id,
+          fromIso,
+          toIso,
+          limitCount: 500,
+        }),
+        firebaseDb.getEvents({
+          roomId: currentRoom.id,
+          fromIso,
+          toIso,
+          limitCount: 500,
+          strict: true,
+        }),
+      ]);
+      const loadedEvents = eventRes.rows
+        .map((e) => ({ ...e, epoch: Date.parse(e.timestamp) }))
+        .filter((e) => Number.isFinite(e.epoch))
+        .sort((a, b) => a.epoch - b.epoch);
+      setEvents(loadedEvents);
 
-      if (loaded.length > 0) {
+      const first = Math.min(
+        loaded[0]?.start_epoch ?? Infinity,
+        loadedEvents[0]?.epoch ?? Infinity,
+      );
+      if (loaded.length > 0 || loadedEvents.length > 0) {
         setSegments(loaded);
-        if (searchEpoch) {
-          setCurrentTime(searchEpoch);
-        } else {
-          setCurrentTime(loaded[0]?.start_epoch ?? 0);
-        }
+        setCurrentTime(searchEpoch ?? (Number.isFinite(first) ? first : 0));
       } else {
         setSegments([]);
         setCurrentTime(searchEpoch ?? 0);
       }
-    } catch {
+    } catch (err) {
       setSegments([]);
+      setEvents([]);
+      setLoadError(err);
     } finally {
       setIsLoadingSegments(false);
       setIsPlaying(false);
@@ -263,6 +312,15 @@ function PlaybackPage() {
     setCurrentTime(startTime);
   };
 
+  const currentEvent = useMemo(() => {
+    let best: (typeof events)[number] | null = null;
+    for (const e of events) {
+      const d = Math.abs(e.epoch - currentTime);
+      if (d <= EVENT_NOW_WINDOW_MS && (!best || d < Math.abs(best.epoch - currentTime))) best = e;
+    }
+    return best;
+  }, [events, currentTime]);
+
   const selectedTarget = useMemo(() => {
     return interpolatedFrame.targets.find((t) => t.target_id === selectedTargetId);
   }, [interpolatedFrame.targets, selectedTargetId]);
@@ -299,6 +357,8 @@ function PlaybackPage() {
         title="Route Playback"
         description="Inspect historical target trajectories, movement trails, and zone dwells across time."
       />
+
+      {loadError ? <HistoryError error={loadError} /> : null}
 
       {/* TOOLBAR CONTROLS */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border bg-card p-4 shadow-card">
@@ -395,8 +455,20 @@ function PlaybackPage() {
                 </span>
               </div>
 
+              {currentEvent && (
+                <div
+                  className={`absolute right-3 top-3 flex max-w-[60%] items-center gap-2 rounded-md px-2.5 py-1 text-xs font-medium shadow-sm ${severityClass(currentEvent.severity, currentEvent.event_type)}`}
+                >
+                  <AlertTriangle className="size-3.5 shrink-0" />
+                  <span className="truncate">
+                    {eventLabel(currentEvent)}
+                    {currentEvent.zone_name ? ` · ${currentEvent.zone_name}` : ""}
+                  </span>
+                </div>
+              )}
+
               {/* Empty state overlay when no trajectories exist for selected date */}
-              {segments.length === 0 && !isLoadingSegments && (
+              {segments.length === 0 && events.length === 0 && !isLoadingSegments && !loadError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-card/85 backdrop-blur-xs p-6 text-center rounded-lg border">
                   <Calendar className="size-8 text-muted-foreground mb-2" />
                   <p className="font-semibold text-sm">No trajectory records for {selectedDate}</p>
@@ -413,6 +485,55 @@ function PlaybackPage() {
 
         {/* Side Inspector Panel */}
         <div className="space-y-6">
+          <Panel
+            title="Events"
+            subtitle={
+              events.length === 0
+                ? "Nothing was recorded for this day"
+                : `${events.length} on this day · click to jump`
+            }
+          >
+            {events.length > 0 ? (
+              <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                {events.map((e) => (
+                  <li key={e.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlaying(false);
+                        setCurrentTime(Math.max(startTime, e.epoch - 2000));
+                      }}
+                      className={`flex w-full items-start gap-2 rounded-lg border p-2 text-left text-xs transition-colors hover:bg-muted/50 ${
+                        currentEvent?.id === e.id ? "border-primary bg-primary/5" : ""
+                      }`}
+                    >
+                      <span
+                        className={`mt-0.5 inline-block size-2.5 shrink-0 rounded-full ${severityClass(e.severity, e.event_type)}`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium text-foreground">
+                            {eventLabel(e)}
+                          </span>
+                          <span className="shrink-0 font-mono text-muted-foreground">
+                            {formatClockTime(e.epoch)}
+                          </span>
+                        </span>
+                        <span className="block truncate text-muted-foreground">
+                          {e.description}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="py-6 text-center text-xs text-muted-foreground">
+                Entries, zone alerts and falls appear here and on the timeline.
+              </p>
+            )}
+          </Panel>
+
           <Panel title="Active Targets" subtitle={`At ${formatClockTime(currentTime)}`}>
             {interpolatedFrame.targets.length > 0 ? (
               <div className="space-y-3">
@@ -542,9 +663,26 @@ function PlaybackPage() {
                 setCurrentTime(val[0]);
               }
             }}
-            disabled={segments.length === 0}
+            disabled={segments.length === 0 && events.length === 0}
             className="cursor-pointer"
           />
+          {events.length > 0 && totalDurationMs > 0 && (
+            <div className="relative h-4" aria-label="Event markers">
+              {events.map((e) => (
+                <button
+                  key={e.id}
+                  type="button"
+                  title={`${formatClockTime(e.epoch)} · ${eventLabel(e)}${e.description ? ` — ${e.description}` : ""}`}
+                  onClick={() => {
+                    setIsPlaying(false);
+                    setCurrentTime(Math.max(startTime, e.epoch - 2000));
+                  }}
+                  style={{ left: `${((e.epoch - startTime) / totalDurationMs) * 100}%` }}
+                  className={`absolute top-0.5 size-3 -translate-x-1/2 rounded-full ring-2 ring-card ${severityClass(e.severity, e.event_type)}`}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Playback Button Controls */}
@@ -578,7 +716,7 @@ function PlaybackPage() {
                 }
                 setIsPlaying(!isPlaying);
               }}
-              disabled={segments.length === 0}
+              disabled={segments.length === 0 && events.length === 0}
             >
               {isPlaying ? (
                 <>

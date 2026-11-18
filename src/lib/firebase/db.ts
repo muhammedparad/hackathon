@@ -332,6 +332,50 @@ const IS_TEST =
   typeof process !== "undefined" &&
   (Boolean(process.env["VITEST"]) || process.env["NODE_ENV"] === "test");
 
+/** Reading history (playback, analytics) may take a while on a cold connection; a short timeout looks like "no data". */
+export const HISTORY_TIMEOUT_MS = 20_000;
+
+export type HistoryErrorKind = "index" | "permission" | "timeout" | "other";
+
+/** A history query that failed, with a reason the user can act on (never an empty list pretending to be "no data"). */
+export class HistoryQueryError extends Error {
+  readonly kind: HistoryErrorKind;
+  readonly indexUrl: string | null;
+  constructor(kind: HistoryErrorKind, message: string, indexUrl: string | null = null) {
+    super(message);
+    this.name = "HistoryQueryError";
+    this.kind = kind;
+    this.indexUrl = indexUrl;
+  }
+}
+
+export function explainFirestoreError(err: unknown): HistoryQueryError {
+  if (err instanceof HistoryQueryError) return err;
+  const code = (err as { code?: string })?.code ?? "";
+  const raw = err instanceof Error ? err.message : String(err);
+  if (code === "failed-precondition" || /requires an index/i.test(raw)) {
+    const url = /https:\/\/console\.firebase\.google\.com\S+/.exec(raw)?.[0] ?? null;
+    return new HistoryQueryError(
+      "index",
+      "Firestore needs an index for this query. Create it once with the link below, or run: firebase deploy --only firestore:indexes",
+      url,
+    );
+  }
+  if (code === "permission-denied") {
+    return new HistoryQueryError(
+      "permission",
+      "Firestore denied the read. Publish the current firestore.rules in the Firebase console (Firestore > Rules).",
+    );
+  }
+  if (/timeout/i.test(raw)) {
+    return new HistoryQueryError(
+      "timeout",
+      "Firestore did not answer in time. Check your connection and that the Firestore database exists in this Firebase project.",
+    );
+  }
+  return new HistoryQueryError("other", raw);
+}
+
 function withTimeout<T>(p: Promise<T>, ms?: number): Promise<T> {
   const timeoutMs = ms ?? (IS_TEST ? 200 : 1500);
   return Promise.race([
@@ -341,6 +385,8 @@ function withTimeout<T>(p: Promise<T>, ms?: number): Promise<T> {
     ),
   ]);
 }
+
+const SEGMENT_LOOKBACK_MS = 5 * 60_000;
 
 export function getFirestoreDb(): Firestore | null {
   if (firestoreInstance) return firestoreInstance;
@@ -690,6 +736,8 @@ export const firebaseDb = {
     severity?: AlertSeverity | undefined;
     acknowledged?: boolean | undefined;
     limitCount?: number | undefined;
+    /** Throw a readable error instead of falling back to an empty/local result (used by playback and analytics). */
+    strict?: boolean | undefined;
   }): Promise<{ rows: OccupancyEvent[]; count: number }> {
     const filterLocal = (events: OccupancyEvent[]) => {
       let res = events;
@@ -717,10 +765,15 @@ export const firebaseDb = {
       const q = query(
         col,
         where("room_id", "==", filters.roomId),
+        ...(filters.fromIso ? [where("timestamp", ">=", filters.fromIso)] : []),
+        ...(filters.toIso ? [where("timestamp", "<=", filters.toIso)] : []),
         orderBy("timestamp", "desc"),
         limit(filters?.limitCount ?? 50),
       );
-      const snapshot = await withTimeout(getDocs(q));
+      const snapshot = await withTimeout(
+        getDocs(q),
+        filters.strict ? HISTORY_TIMEOUT_MS : undefined,
+      );
       let rows = snapshot.docs.map((d) => {
         const data = d.data();
         let ackAt = data["acknowledged_at"];
@@ -756,13 +809,14 @@ export const firebaseDb = {
       if (filters?.toIso) {
         rows = rows.filter((r) => r.timestamp <= filters.toIso!);
       }
-      if (rows.length === 0) {
+      if (rows.length === 0 && !filters.strict) {
         const local = filterLocal(getLocalEventsFromStorage());
         if (local.rows.length > 0) return local;
       }
       return { rows, count: rows.length };
     } catch (err) {
       logFirestoreWarning("Events query fallback", err);
+      if (filters.strict && !IS_TEST) throw explainFirestoreError(err);
       return filterLocal(getLocalEventsFromStorage());
     }
   },
@@ -982,13 +1036,23 @@ export const firebaseDb = {
     if (!db) return fallback();
     try {
       const col = collection(db, "trajectory_segments");
+      // Window on start_epoch inside Firestore so the limit applies to the requested period, not to all time.
+      // A segment lasts at most ~2 minutes, so look back a little before the window start.
+      const fromEpoch = options.fromIso ? Date.parse(options.fromIso) - SEGMENT_LOOKBACK_MS : null;
+      const toEpoch = options.toIso ? Date.parse(options.toIso) : null;
       const q = query(
         col,
         where("room_id", "==", options.roomId),
+        ...(fromEpoch !== null && Number.isFinite(fromEpoch)
+          ? [where("start_epoch", ">=", fromEpoch)]
+          : []),
+        ...(toEpoch !== null && Number.isFinite(toEpoch)
+          ? [where("start_epoch", "<=", toEpoch)]
+          : []),
         orderBy("start_epoch", "asc"),
         limit(options.limitCount ?? 300),
       );
-      const snapshot = await withTimeout(getDocs(q));
+      const snapshot = await withTimeout(getDocs(q), HISTORY_TIMEOUT_MS);
       let list = snapshot.docs
         .map((d) => ({
           id: d.id,
@@ -1011,7 +1075,8 @@ export const firebaseDb = {
     } catch (err) {
       logFirestoreWarning("Get trajectory segments", err);
       // Local cache only inside the test runner; the app never substitutes local data for Firestore.
-      return IS_TEST ? fallback() : [];
+      if (IS_TEST) return fallback();
+      throw explainFirestoreError(err);
     }
   },
 

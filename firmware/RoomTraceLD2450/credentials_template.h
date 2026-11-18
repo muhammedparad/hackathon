@@ -17,3 +17,10 @@
 // 1 = skip TLS certificate checking (first tests only; the device key could be read by an attacker
 // on the same network). Set to 0 once a CA certificate is added (see README).
 #define ROOMTRACE_TLS_INSECURE 1
+
+// 1 = send over a WebSocket (fast, needs the "WebSockets" library by Markus Sattler), with HTTPS POST as
+// automatic fallback. 0 = HTTPS POST only (no extra library).
+#define ROOMTRACE_USE_WS 1
+
+// Only when ROOMTRACE_TLS_INSECURE is 0: the server's root CA certificate in PEM form, e.g.
+// #define ROOMTRACE_CA_CERT "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"

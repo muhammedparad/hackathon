@@ -12,7 +12,8 @@ The two outputs are processed and shown separately.
 ## Data flow
 
 ```
-LD2450 → ESP32-S3 → Wi-Fi/HTTPS → /api/public/device/*  (Node server on Render)
+LD2450 → ESP32-S3 → Wi-Fi → WebSocket /device-ws  (or HTTPS POST /api/public/device/*, automatic fallback)
+                              Node server on Render
                                       ├─ live WebSocket (/live-ws) → dashboard, instantly
                                       └─ Firestore (telemetry, events)
 ```

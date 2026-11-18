@@ -4,6 +4,9 @@
 /** Path of the live WebSocket endpoint (a Nitro route; only exists on the always-on Node server). */
 export const LIVE_WS_PATH = "/live-ws";
 
+/** Device WebSocket (ESP32 to server). Needs the same always-on Node process as LIVE_WS_PATH. */
+export const DEVICE_WS_PATH = "/device-ws";
+
 /** One radar target exactly as the device reported it (LD2450). */
 export interface LiveTarget {
   target_id: number;

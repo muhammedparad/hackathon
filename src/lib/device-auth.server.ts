@@ -44,6 +44,19 @@ export interface AuthenticatedDevice {
   last_seen: string | null;
 }
 
+/* ---------- Short-lived cache of verified devices ----------
+ * Without it every frame costs two Firestore reads (device + credential) BEFORE the frame can be published
+ * live, which adds hundreds of milliseconds per frame and burns the read quota. A verified device is
+ * remembered for a few seconds, keyed by id + hash of the key, so a wrong key can never hit the cache.
+ * Rotating a secret clears it at once; other changes (room assignment, deletion) apply within the TTL.
+ */
+export const DEVICE_AUTH_CACHE_TTL_MS = 15_000;
+const authCache = new Map<string, { device: AuthenticatedDevice; expires: number }>();
+
+export function invalidateDeviceAuthCache(): void {
+  authCache.clear();
+}
+
 /* ---------- Test-only device registry ----------
  * Consulted ONLY under the test runner (VITEST). In production it is never read, so no device can
  * authenticate except one registered in Firestore. Tests fill it through _registerTestDevice.
@@ -74,8 +87,14 @@ export function _clearTestDevices(): void {
 
 /** Authenticates an ESP32 via X-Device-Id + X-Device-Key headers against Firestore (Admin SDK). */
 export async function authenticateDevice(request: Request) {
-  const deviceId = request.headers.get("x-device-id");
-  const key = request.headers.get("x-device-key");
+  return authenticateCredentials(
+    request.headers.get("x-device-id"),
+    request.headers.get("x-device-key"),
+  );
+}
+
+/** Same check for any transport: HTTP headers, or the first message on the device WebSocket. */
+export async function authenticateCredentials(deviceId: string | null, key: string | null) {
   if (!deviceId || !key) {
     return { error: json({ error: "Missing device credentials" }, 401) } as const;
   }
@@ -101,6 +120,11 @@ export async function authenticateDevice(request: Request) {
       return { device: { ...t.device, last_seen: new Date().toISOString() } } as const;
     }
   }
+
+  const cacheKey = `${deviceId}:${keyHash}`;
+  const hit = authCache.get(cacheKey);
+  if (hit && hit.expires > Date.now()) return { device: { ...hit.device } } as const;
+  authCache.delete(cacheKey);
 
   const db = getAdminFirestore();
   if (!db) {
@@ -131,6 +155,7 @@ export async function authenticateDevice(request: Request) {
         .get();
       const secretHash = credSnap.docs[0]?.data()?.["secret_hash"] as string | undefined;
       if (secretHash && timingSafeEqual(secretHash, keyHash)) {
+        authCache.set(cacheKey, { device: dev, expires: Date.now() + DEVICE_AUTH_CACHE_TTL_MS });
         return { device: dev } as const;
       }
     }

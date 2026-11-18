@@ -291,6 +291,7 @@ export const heartbeatBodySchema = z.object({
   ld2450_connected: z.boolean().optional(),
 });
 export type TelemetryBody = z.infer<typeof telemetryBodySchema>;
+export type HeartbeatBody = z.infer<typeof heartbeatBodySchema>;
 
 /** Frames older than this are considered stale. */
 export const STALE_AFTER_MS = 5000;

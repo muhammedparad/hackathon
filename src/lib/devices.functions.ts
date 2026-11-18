@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getAdminFirestore, verifyUserToken } from "@/lib/firebase/admin.server";
-import { sha256Hex } from "@/lib/device-auth.server";
+import { invalidateDeviceAuthCache, sha256Hex } from "@/lib/device-auth.server";
 
 function randomSecret(): string {
   const b = crypto.getRandomValues(new Uint8Array(24));
@@ -147,5 +147,6 @@ export const rotateDeviceSecret = createServerFn({ method: "POST" })
         .collection("device_credentials")
         .add({ device_id: data.id, secret_hash: secretHash, created_at: nowIso });
     }
+    invalidateDeviceAuthCache(); // the old secret must stop working immediately
     return { secret };
   });

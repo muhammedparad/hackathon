@@ -2,14 +2,20 @@
   RoomTrace LD2450 firmware (ESP32-S3)  -  real data only, no simulation
 
   LD2450 (UART1, GPIO18 RX / GPIO17 TX, 256000 baud)  ->  decoded targets (x, y, speed)
-  ESP32 -> Wi-Fi -> HTTPS -> RoomTrace server on Render:
-      POST /api/public/device/telemetry   (up to 2 per second while someone is in view)
-      POST /api/public/device/heartbeat   (every 15 s)
-  Auth: X-Device-Id / X-Device-Key headers (register the device on the website first).
+  ESP32 -> Wi-Fi -> RoomTrace server on Render, two ways, chosen automatically:
+    1. WebSocket (wss://<host>/device-ws): one connection kept open, authenticated once, then every frame is
+       a small message (no TLS handshake or HTTP headers per frame). Fast: frames can go out ~6x per second.
+    2. HTTPS POST fallback, used whenever the socket is not ready (and for the first seconds after boot):
+         POST /api/public/device/telemetry   (up to 2 per second while someone is in view)
+         POST /api/public/device/heartbeat   (every 15 s)
+  Auth: device id + key (register the device on the website first): X-Device-Id / X-Device-Key headers for
+  HTTPS, one {"type":"auth"} message for the WebSocket.
 
   Setup: copy credentials_template.h to credentials.h and fill it in.
   Arduino IDE: board "ESP32S3 Dev Module", USB CDC On Boot = Enabled, Serial Monitor 115200 baud.
-  Needs no extra libraries (WiFi, WiFiClientSecure, HTTPClient ship with the ESP32 core).
+  Library needed for the WebSocket: "WebSockets" by Markus Sattler (Library Manager, v2.4 or newer).
+  Without it, set ROOMTRACE_USE_WS 0 in credentials.h and everything works over HTTPS as before.
+  (WiFi, WiFiClientSecure, HTTPClient ship with the ESP32 core.)
 
   What is NOT in here on purpose: RD-6x, breathing/heart rate, any made-up data. If the LD2450 is
   silent, nothing is sent as telemetry and the heartbeat reports the sensor as disconnected.
@@ -29,6 +35,18 @@
 #error "Missing credentials.h: copy credentials_template.h to credentials.h and fill it in."
 #endif
 
+// WebSocket to the server (set to 0 in credentials.h to use HTTPS POST only).
+#ifndef ROOMTRACE_USE_WS
+#define ROOMTRACE_USE_WS 1
+#endif
+#ifndef ROOMTRACE_WS_PATH
+#define ROOMTRACE_WS_PATH "/device-ws"
+#endif
+
+#if ROOMTRACE_USE_WS
+#include <WebSocketsClient.h>
+#endif
+
 static const char *FW_VERSION = "ld2450-1.0.0";
 
 // ---------------- pins / timing ----------------
@@ -38,7 +56,11 @@ static constexpr uint32_t LD_BAUD   = 256000;
 
 // The server currently stores every post in Firestore (free tier: ~20k writes/day), so keep these
 // gentle until the server downsamples history. Lower SEND_INTERVAL_MS (e.g. 200) for smoother live view.
-static constexpr uint32_t SEND_INTERVAL_MS   = 500;    // max 2 telemetry posts/s while targets present
+static constexpr uint32_t SEND_INTERVAL_MS   = 500;    // HTTPS fallback: max 2 telemetry posts/s while targets present
+// Over the WebSocket the server shows every frame live but stores history at most about once a second
+// (and at once when the number of targets changes), so a fast send rate does not cost database writes.
+static constexpr uint32_t WS_SEND_INTERVAL_MS = 150;   // ~6 frames/s while targets present
+static constexpr uint32_t WS_RECONNECT_MS     = 5000;
 static constexpr uint32_t EMPTY_INTERVAL_MS  = 10000;  // empty-room posts, so the server sees "still empty"
 static constexpr uint32_t HEARTBEAT_MS       = 15000;
 static constexpr uint32_t SENSOR_TIMEOUT_MS  = 3000;   // no LD2450 frame for this long -> sensor offline
@@ -186,6 +208,7 @@ static HTTPClient http;
 static String baseUrl;
 
 static uint32_t postsOk = 0, postsFail = 0, postsDropped = 0;
+static uint32_t postMsSum = 0, postMsMax = 0, postMsCount = 0;  // round-trip time of each POST (ms)
 static int      lastHttpCode = 0;
 
 static int postJson(const char *path, const char *body) {
@@ -198,7 +221,12 @@ static int postJson(const char *path, const char *body) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Id", ROOMTRACE_DEVICE_ID);
   http.addHeader("X-Device-Key", ROOMTRACE_DEVICE_KEY);
+  const uint32_t postStart = millis();
   const int code = http.POST((uint8_t *)body, strlen(body));
+  const uint32_t postMs = millis() - postStart;
+  postMsSum += postMs;
+  if (postMs > postMsMax) postMsMax = postMs;
+  ++postMsCount;
   http.end();
   lastHttpCode = code;
   if (code >= 200 && code < 300) {
@@ -214,6 +242,89 @@ static int postJson(const char *path, const char *body) {
   }
   return code;
 }
+
+// ---------------- WebSocket (fast path) ----------------
+// wsReady is true only after the server answered our auth message with {"type":"ready"}.
+// While it is false, every send goes through postJson() above, so a socket problem never silences the device.
+static bool     wsReady = false;
+static bool     wsStarted = false;
+static uint32_t wsSent = 0, wsConnects = 0, wsDrops = 0, httpFallbacks = 0;
+
+#if ROOMTRACE_USE_WS
+static WebSocketsClient ws;
+
+static void wsEvent(WStype_t type, uint8_t *payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED: {
+      char auth[200];
+      snprintf(auth, sizeof(auth), "{\"type\":\"auth\",\"device_id\":\"%s\",\"key\":\"%s\"}",
+               ROOMTRACE_DEVICE_ID, ROOMTRACE_DEVICE_KEY);
+      ws.sendTXT(auth);
+      ++wsConnects;
+      Serial.println("{\"type\":\"ws\",\"status\":\"connected\",\"msg\":\"authenticating\"}");
+      break;
+    }
+    case WStype_TEXT: {
+      char msg[160];
+      const size_t n = length < sizeof(msg) - 1 ? length : sizeof(msg) - 1;
+      memcpy(msg, payload, n);
+      msg[n] = 0;
+      if (strstr(msg, "\"type\":\"ready\"")) {
+        wsReady = true;
+        Serial.println("{\"type\":\"ws\",\"status\":\"ready\"}");
+      } else if (strstr(msg, "\"type\":\"error\"")) {
+        Serial.printf("{\"type\":\"ws_error\",\"server\":%s,\"hint\":\"%s\"}\n", msg,
+                      strstr(msg, "unauthorized") ? "check ROOMTRACE_DEVICE_ID / KEY" : "see server message");
+      }  // acks and pongs need no handling
+      break;
+    }
+    case WStype_DISCONNECTED:
+      if (wsReady || wsConnects) ++wsDrops;
+      wsReady = false;
+      Serial.println("{\"type\":\"ws\",\"status\":\"disconnected\",\"msg\":\"using HTTPS until it is back\"}");
+      break;
+    default:
+      break;
+  }
+}
+
+static void wsStart() {
+  if (wsStarted) return;
+  wsStarted = true;
+#if ROOMTRACE_TLS_INSECURE
+  ws.beginSSL(ROOMTRACE_SERVER_HOST, ROOMTRACE_SERVER_PORT, ROOMTRACE_WS_PATH);  // no CA given: certificate not checked
+#else
+  ws.beginSslWithCA(ROOMTRACE_SERVER_HOST, ROOMTRACE_SERVER_PORT, ROOMTRACE_WS_PATH, ROOMTRACE_CA_CERT);
+#endif
+  ws.onEvent(wsEvent);
+  ws.setReconnectInterval(WS_RECONNECT_MS);
+  ws.enableHeartbeat(15000, 3000, 2);  // ping every 15 s; drop the connection after 2 missed pongs
+}
+#endif
+
+/** Sends `body` (a JSON object) as a WebSocket message of the given type. False means: use HTTPS instead. */
+static bool wsPost(const char *type, const char *body) {
+#if ROOMTRACE_USE_WS
+  if (!wsReady || body[0] != '{') return false;
+  char msg[720];
+  const int n = snprintf(msg, sizeof(msg), "{\"type\":\"%s\",%s", type, body + 1);
+  if (n <= 0 || (size_t)n >= sizeof(msg)) return false;
+  if (!ws.sendTXT((uint8_t *)msg, (size_t)n)) return false;
+  ++wsSent;
+  return true;
+#else
+  (void)type; (void)body;
+  return false;
+#endif
+}
+
+static void deliver(const char *type, const char *path, const char *body) {
+  if (wsPost(type, body)) return;
+  ++httpFallbacks;
+  postJson(path, body);
+}
+
+static bool fastPath() { return wsReady; }
 
 static uint32_t lastSendMs = 0;
 static uint8_t  lastSentCount = 0;
@@ -243,7 +354,7 @@ static void sendTelemetry(uint32_t now) {
   n += snprintf(body + n, sizeof(body) - n, "]}}");
   if (n <= 0 || (size_t)n >= sizeof(body)) { Serial.println("{\"type\":\"error\",\"msg\":\"telemetry body too long\"}"); return; }
 
-  postJson("/api/public/device/telemetry", body);
+  deliver("telemetry", "/api/public/device/telemetry", body);
   lastSendMs = now;
   lastSentCount = count;
 }
@@ -256,7 +367,7 @@ static void sendHeartbeat(uint32_t now) {
            "\"sensor_status\":\"%s\",\"ld2450_connected\":%s}",
            FW_VERSION, WiFi.localIP().toString().c_str(), WiFi.RSSI(), (unsigned)ESP.getFreeHeap(),
            online ? "online" : "disconnected", online ? "true" : "false");
-  postJson("/api/public/device/heartbeat", body);
+  deliver("heartbeat", "/api/public/device/heartbeat", body);
   lastHeartbeatMs = now;
 }
 
@@ -268,15 +379,20 @@ static void printStatus(uint32_t now) {
   Serial.printf(
       "{\"type\":\"status\",\"ms\":%lu,\"wifi\":%s,\"rssi\":%d,\"time_synced\":%s,\"ld_online\":%s,"
       "\"ld_fps\":%.1f,\"ld_bad_footer\":%lu,\"targets\":%u,\"post_ok\":%lu,\"post_fail\":%lu,"
-      "\"post_dropped\":%lu,\"last_http\":%d}\n",
+      "\"post_dropped\":%lu,\"last_http\":%d,\"post_ms_avg\":%lu,\"post_ms_max\":%lu,"
+      "\"ws_ready\":%s,\"ws_sent\":%lu,\"ws_drops\":%lu,\"http_fallbacks\":%lu}\n",
       (unsigned long)now, WiFi.status() == WL_CONNECTED ? "true" : "false", WiFi.RSSI(),
       timeSynced() ? "true" : "false", sensorOnline(now) ? "true" : "false", ldFrames / secs,
       (unsigned long)ldBadFooter, (unsigned)reportableCount(), (unsigned long)postsOk,
-      (unsigned long)postsFail, (unsigned long)postsDropped, lastHttpCode);
+      (unsigned long)postsFail, (unsigned long)postsDropped, lastHttpCode,
+      (unsigned long)(postMsCount ? postMsSum / postMsCount : 0), (unsigned long)postMsMax,
+      wsReady ? "true" : "false", (unsigned long)wsSent, (unsigned long)wsDrops,
+      (unsigned long)httpFallbacks);
   if (!sensorOnline(now))
     Serial.println("{\"type\":\"warn\",\"msg\":\"no LD2450 frames: check TX->GPIO18, RX->GPIO17, 5V, GND\"}");
   ldFrames = 0;
   ldBadFooter = 0;
+  postMsSum = postMsMax = postMsCount = 0;
 }
 
 // ---------------- setup / loop ----------------
@@ -291,12 +407,15 @@ void setup() {
 #if ROOMTRACE_TLS_INSECURE
   secureClient.setInsecure();
   Serial.println("{\"type\":\"warn\",\"msg\":\"TLS certificate checking is OFF (ROOMTRACE_TLS_INSECURE=1): test only\"}");
+#else
+  secureClient.setCACert(ROOMTRACE_CA_CERT);  // define ROOMTRACE_CA_CERT (PEM) in credentials.h, see README
 #endif
 
   baseUrl = String("https://") + ROOMTRACE_SERVER_HOST;
   if (ROOMTRACE_SERVER_PORT != 443) baseUrl += String(":") + String(ROOMTRACE_SERVER_PORT);
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);  // modem sleep can add 100-300 ms of latency to every request
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   lastWifiTryMs = millis();
@@ -311,11 +430,19 @@ void loop() {
 
   maintainWifi(now);
 
+#if ROOMTRACE_USE_WS
+  if (WiFi.status() == WL_CONNECTED) {
+    wsStart();  // begins once, after Wi-Fi is up; the library then reconnects by itself
+    ws.loop();
+  }
+#endif
+
   const bool online = sensorOnline(now);
   const uint8_t count = reportableCount();
 
   if (WiFi.status() == WL_CONNECTED && online) {
-    const bool targetsDue = count > 0 && ldNewFrame && (now - lastSendMs >= SEND_INTERVAL_MS);
+    const uint32_t interval = fastPath() ? WS_SEND_INTERVAL_MS : SEND_INTERVAL_MS;
+    const bool targetsDue = count > 0 && ldNewFrame && (now - lastSendMs >= interval);
     const bool justEmptied = count == 0 && lastSentCount > 0;
     const bool emptyDue = count == 0 && (now - lastSendMs >= EMPTY_INTERVAL_MS);
     if (targetsDue || justEmptied || emptyDue) {

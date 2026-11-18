@@ -93,14 +93,30 @@ function useSystemStatus() {
     const receiving = Object.values(live.frames).some(
       (f) => f.ld && !isStale(f.ld.timestamp, live.now),
     );
-    return { total: devices.length, online: online.length, receiving, stream: live.streamStatus };
-  }, [devices, live.frames, live.now, live.streamStatus]);
+    return {
+      total: devices.length,
+      online: online.length,
+      receiving,
+      stream: live.streamStatus,
+      transport: live.transport,
+    };
+  }, [devices, live.frames, live.now, live.streamStatus, live.transport]);
 }
 
 export function LivePill({ className }: { className?: string }) {
   const s = useSystemStatus();
   const state = s.receiving
-    ? { label: "Live", dot: "bg-emerald-500 animate-pulse", pill: "bg-emerald-50 text-emerald-700" }
+    ? s.transport === "websocket"
+      ? {
+          label: "Live",
+          dot: "bg-emerald-500 animate-pulse",
+          pill: "bg-emerald-50 text-emerald-700",
+        }
+      : {
+          label: "Live · delayed",
+          dot: "bg-amber-400 animate-pulse",
+          pill: "bg-amber-50 text-amber-700",
+        }
     : s.stream === "offline"
       ? { label: "Offline", dot: "bg-slate-400", pill: "bg-slate-100 text-slate-600" }
       : { label: "Waiting", dot: "bg-amber-400", pill: "bg-amber-50 text-amber-700" };
@@ -113,6 +129,13 @@ export function LivePill({ className }: { className?: string }) {
       )}
       role="status"
       aria-label={`Live feed: ${state.label}`}
+      title={
+        s.transport === "websocket"
+          ? "Instant push over WebSocket"
+          : s.transport === "firestore"
+            ? "WebSocket not connected: showing stored data, a few seconds behind"
+            : "No live data"
+      }
     >
       <span className={cn("size-2 rounded-full", state.dot)} />
       {state.label}

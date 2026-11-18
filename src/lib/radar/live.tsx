@@ -11,7 +11,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { firebaseDb, type Device, type OccupancyEvent } from "@/lib/firebase/db";
 import { authClient } from "@/lib/auth";
-import { connectLive } from "@/lib/live/ws-client";
+import { connectLive, type LiveConnState } from "@/lib/live/ws-client";
 import { roomsQuery } from "@/lib/data";
 import type { AlertSeverity, EventEvidence, EventType, LD2450Frame, RD61Frame } from "./types";
 import { STALE_AFTER_MS } from "./types";
@@ -46,6 +46,11 @@ interface Ctx {
   /** Real events recorded by the server, newest first. */
   liveEvents: LiveEvent[];
   streamStatus: StreamStatus;
+  /**
+   * How live data reaches this page right now: "websocket" = instant push from the server; "firestore" =
+   * the slower stored-data listener (used when the socket is not connected); "none" = nothing arriving.
+   */
+  transport: "websocket" | "firestore" | "none";
   selectedRoomId: string | null;
   setSelectedRoomId: (id: string) => void;
   now: number;
@@ -107,6 +112,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [frames, setFrames] = useState<Record<string, RoomLive>>({});
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
+  const [wsState, setWsState] = useState<LiveConnState>("connecting");
   const [now, setNow] = useState(() => Date.now());
   const wsLastFrameAt = useRef(0);
 
@@ -198,6 +204,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     const stopLive = connectLive({
       getToken: async () => (await authClient.getSession())?.token ?? null,
+      onState: (s) => {
+        if (!cancelled) setWsState(s);
+      },
       onMessage: (m) => {
         if (cancelled) return;
         if (m.type === "frame") {
@@ -239,16 +248,21 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(tick);
   }, []);
 
+  const anyFresh = Object.values(frames).some((f) => f.ld && !isStale(f.ld.timestamp, now));
+  const transport: Ctx["transport"] =
+    wsState === "live" ? "websocket" : anyFresh || streamStatus === "live" ? "firestore" : "none";
+
   const value = useMemo<Ctx>(
     () => ({
       frames,
       liveEvents,
       streamStatus,
+      transport,
       selectedRoomId: selected,
       setSelectedRoomId: (id) => setSelectedRoomIdRaw(id),
       now,
     }),
-    [frames, liveEvents, streamStatus, selected, setSelectedRoomIdRaw, now],
+    [frames, liveEvents, streamStatus, transport, selected, setSelectedRoomIdRaw, now],
   );
 
   return <LiveCtx.Provider value={value}>{children}</LiveCtx.Provider>;

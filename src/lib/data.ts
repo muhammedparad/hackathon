@@ -12,6 +12,7 @@ import type {
   AlertSeverity,
   Door,
   RoomObject,
+  RoomMode,
   RoomZone,
   TrajectoryPoint,
   TrajectorySegment,
@@ -29,7 +30,7 @@ export type {
 };
 export type EventRow = OccupancyEvent;
 
-/** Centralised data client: queries Cloud Firestore for the signed-in user. No local or demo data. */
+/** Centralised data client: queries Cloud Firestore for the signed-in user. No local data. */
 async function currentUserId(): Promise<string | undefined> {
   return (await authClient.getUser())?.id;
 }
@@ -171,6 +172,7 @@ export function useRoomMutations() {
       objects?: RoomObject[];
       shape?: "rectangle" | "polygon";
       polygon_vertices?: Array<{ x_mm: number; y_mm: number }>;
+      mode?: RoomMode;
     }) => {
       if (r.id) {
         await firebaseDb.updateRoom(r.id, r);
@@ -186,6 +188,7 @@ export function useRoomMutations() {
         doors: r.doors,
         zones: r.zones,
         objects: r.objects,
+        mode: r.mode,
         shape: r.shape,
         polygon_vertices: r.polygon_vertices,
         user_id: user.id,

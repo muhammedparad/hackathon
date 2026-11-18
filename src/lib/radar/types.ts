@@ -61,6 +61,8 @@ export const EVENT_TYPES = [
   "restricted_zone_entry",
   "restricted_zone_exit",
   "restricted_zone_presence",
+  "bed_exit",
+  "left_room",
   "hazard_zone_entry",
   "hazard_prolonged_presence",
   "unexpected_entry",
@@ -85,6 +87,8 @@ export const EVENT_LABELS: Record<EventType, string> = {
   restricted_zone_entry: "Restricted zone entry",
   restricted_zone_exit: "Restricted zone exit",
   restricted_zone_presence: "Still in restricted zone",
+  bed_exit: "Got out of bed",
+  left_room: "Woke up and left the room",
   hazard_zone_entry: "Hazard zone entry",
   hazard_prolonged_presence: "Prolonged hazard presence",
   unexpected_entry: "Entry away from an entry point",
@@ -94,6 +98,26 @@ export const EVENT_LABELS: Record<EventType, string> = {
   prolonged_presence: "Prolonged stay",
   routine_deviation: "Routine deviation",
   candidate_fall: "Candidate fall — experimental",
+};
+
+/**
+ * How a room is watched.
+ * - standard: movement, zones, entry points and falls.
+ * - patient: also alerts when the person gets out of bed, and when they then leave the room.
+ * - solo: for someone living alone. Getting out of bed is only logged; waking up and then leaving the room
+ *   raises an alert.
+ */
+export type RoomMode = "standard" | "patient" | "solo";
+export const ROOM_MODE_LABELS: Record<RoomMode, { label: string; blurb: string }> = {
+  standard: { label: "Standard", blurb: "Movement, zones, entry points and falls." },
+  patient: {
+    label: "Patient mode",
+    blurb: "Alerts when the person gets out of bed, and when they then leave the room.",
+  },
+  solo: {
+    label: "Solo mode",
+    blurb: "For someone living alone: alerts when they wake up and leave the room.",
+  },
 };
 
 /** Severity scale for Phase 3 alerts */

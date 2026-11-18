@@ -86,28 +86,13 @@ function SettingsPage() {
     toast.success("Password updated successfully");
   };
 
-  const clearSim = async () => {
-    try {
-      for (const r of rooms) {
-        await firebaseDb.clearSimulatedEvents(r.id);
-        await firebaseDb.clearSimulatedTrajectories(r.id);
-      }
-      toast.success("Old simulated records deleted");
-    } catch {
-      toast.error("Could not delete some records. Check your connection and try again.");
-    }
-    void qc.invalidateQueries({ queryKey: ["events"] });
-    void qc.invalidateQueries({ queryKey: ["analytics-events"] });
-  };
-
   return (
     <div className="space-y-6">
       <PageHeader title="Settings" />
       <Panel title="Data source">
         <div className="space-y-3 text-sm">
           <p className="text-muted-foreground">
-            Only data received from authenticated, registered devices is shown. Nothing is generated
-            or simulated.
+            Only data received from authenticated, registered devices is shown.
           </p>
           <div className="rounded-lg border bg-muted/40 p-3">
             Hardware status:{" "}
@@ -117,38 +102,6 @@ function SettingsPage() {
               <Pill t="warning">Unverified — no device has reported yet</Pill>
             )}
           </div>
-        </div>
-      </Panel>
-
-      <Panel title="Old simulated records">
-        <div className="flex items-center justify-between gap-4 text-sm">
-          <div>
-            <p className="font-medium">Remove leftover simulated history</p>
-            <p className="text-muted-foreground">
-              Earlier versions could store simulated events and trajectories. They are already
-              hidden everywhere; this deletes them from the database. Real device records are kept.
-            </p>
-          </div>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="outline" size="sm">
-                Delete old simulated records
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete old simulated records?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Every event and trajectory flagged as simulated will be permanently deleted.
-                  Records from real devices are not touched. This cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={clearSim}>Delete</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
         </div>
       </Panel>
 

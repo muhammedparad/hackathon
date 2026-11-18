@@ -90,7 +90,7 @@ function AuthPage() {
             </div>
             <div className="flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
               <Flame className="size-3 text-amber-500" />
-              <span>Firebase</span>
+              {/* <span>Firebase</span> */}
             </div>
           </div>
 
@@ -207,7 +207,7 @@ function AuthPage() {
               </li>
               <li className="flex items-center gap-2">
                 <span className="size-1.5 rounded-full bg-success" />
-                Dynamic Auth · Ready for Firebase integration
+                {/* Dynamic Auth · Ready for Firebase integration */}
               </li>
             </ul>
           </div>

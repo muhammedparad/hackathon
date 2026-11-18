@@ -14,10 +14,10 @@ import {
 } from "lucide-react";
 import type { Radar3DProps } from "@/components/radar/radar-3d";
 import { RadarStage } from "@/components/radar/radar-stage";
-import { DemoVitalsCard } from "@/components/radar/demo-vitals-card";
+import { HeartRateCard } from "@/components/radar/heart-rate-card";
 import { AreaSeries } from "@/components/app/charts";
 import { targetColor, targetLabel } from "@/lib/radar/palette";
-import { StillTracker } from "@/lib/radar/vitals-demo";
+import { StillTracker } from "@/lib/radar/heart-rate";
 import { targetState } from "@/lib/radar/target-state";
 import type { LD2450Target } from "@/lib/radar/types";
 import { cn } from "@/lib/utils";
@@ -252,7 +252,7 @@ export function LiveRadarView(p: LiveRadarViewProps) {
             )}
           </section>
 
-          <DemoVitalsCard targets={p.targets} now={p.now} />
+          <HeartRateCard targets={p.targets} now={p.now} />
 
           <section className={cn(CARD, "p-4")} aria-label="Live signal">
             <div className="flex items-center justify-between gap-3">

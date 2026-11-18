@@ -3,6 +3,7 @@ import {
   type Door,
   type RoomObject,
   type RoomZone,
+  type RoomMode,
   type TelemetryBody,
 } from "@/lib/radar/types";
 import { json, type AuthenticatedDevice } from "@/lib/device-auth.server";
@@ -241,6 +242,7 @@ export async function getRoomAlertEngine(
         entry.engine.updateRoom({
           id: roomId,
           name: (rData?.["name"] as string) || "Monitored Room",
+          mode: (rData?.["mode"] as RoomMode | undefined) ?? "standard",
           width_mm: (rData?.["width_mm"] as number) || 5000,
           length_mm: (rData?.["length_mm"] as number) || 6000,
           doors: (rData?.["doors"] as Door[]) || [],

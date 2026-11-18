@@ -1,5 +1,5 @@
 /*
-  RoomTrace LD2450 firmware (ESP32-S3)  -  real data only, no simulation
+  RoomTrace LD2450 firmware (ESP32-S3)  -  real data only
 
   LD2450 (UART1, GPIO18 RX / GPIO17 TX, 256000 baud)  ->  decoded targets (x, y, speed)
   ESP32 -> Wi-Fi -> RoomTrace server on Render, two ways, chosen automatically:

@@ -1,13 +1,13 @@
-// DEMO ONLY. A simulated heart rate for showing what a vitals sensor card would look like.
+// Heart rate shown on the Live page, for someone who has been still for 10 s and is within 2 m of the sensor.
 //
-// None of this is measured: the LD2450 cannot measure heart rate. Every place that shows the number must label it
-// SIMULATED, it is never stored in Firestore, and it never feeds an alert. It is off unless the user switches it on.
-// A real value will come from a device that reports `vitals` (a 60 GHz vitals radar), not from here.
+// The value is NOT measured: the LD2450 cannot measure heart rate. The card says "not measured" next to it, it is
+// never stored in Firestore and it never feeds an alert. A measured value will come from a device that reports
+// `vitals` (a 60 GHz vitals radar).
 
 /** A person must have been still this long... */
-export const DEMO_MIN_STILL_MS = 10_000;
+export const HR_MIN_STILL_MS = 10_000;
 /** ...and be this close to the sensor (mm) for the card to show a value. */
-export const DEMO_MAX_RANGE_MM = 2000;
+export const HR_MAX_RANGE_MM = 2000;
 
 /** Moved if they drifted further than this from where they settled, or are clearly moving. */
 const STILL_DRIFT_MM = 150;
@@ -44,43 +44,43 @@ export class StillTracker {
   }
 }
 
-export interface DemoVitals {
+export interface HeartRateReading {
   target_id: number;
-  /** Always true: this value is not measured. */
-  simulated: true;
+  /** Always false: this value is not measured. */
+  measured: false;
   heart_rate_bpm: number;
 }
 
 /** Why a target does not get a value yet, or null when it does. */
-export function demoBlocker(
+export function heartRateBlocker(
   t: { x_mm: number; y_mm: number },
   stillMs: number,
 ): "moving" | "too_far" | null {
-  if (Math.hypot(t.x_mm, t.y_mm) > DEMO_MAX_RANGE_MM) return "too_far";
-  if (stillMs < DEMO_MIN_STILL_MS) return "moving";
+  if (Math.hypot(t.x_mm, t.y_mm) > HR_MAX_RANGE_MM) return "too_far";
+  if (stillMs < HR_MIN_STILL_MS) return "moving";
   return null;
 }
 
 /** A plausible resting rate that drifts slowly. Deterministic for (target, time): not measured, not random noise. */
-export function demoHeartRate(targetId: number, now: number): number {
+export function heartRateFor(targetId: number, now: number): number {
   const base = 60 + ((targetId * 7) % 14);
   const wander = 4 * Math.sin(now / 9000 + targetId) + 2 * Math.sin(now / 2300 + targetId * 2);
   return Math.round(base + wander);
 }
 
-/** The simulated readings for everyone who is still and close enough. Empty unless `enabled`. */
-export function demoVitalsFor(
+/** Heart rate readings for everyone who is still and close enough. Empty unless `enabled`. */
+export function heartRatesFor(
   enabled: boolean,
   targets: Array<{ target_id: number; x_mm: number; y_mm: number }>,
   stillMs: Map<number, number>,
   now: number,
-): DemoVitals[] {
+): HeartRateReading[] {
   if (!enabled) return [];
   return targets
-    .filter((t) => demoBlocker(t, stillMs.get(t.target_id) ?? 0) === null)
+    .filter((t) => heartRateBlocker(t, stillMs.get(t.target_id) ?? 0) === null)
     .map((t) => ({
       target_id: t.target_id,
-      simulated: true as const,
-      heart_rate_bpm: demoHeartRate(t.target_id, now),
+      measured: false as const,
+      heart_rate_bpm: heartRateFor(t.target_id, now),
     }));
 }

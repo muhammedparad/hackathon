@@ -1,7 +1,7 @@
 # RoomTraceLD2450
 
 Real-data firmware: LD2450 radar -> ESP32-S3 -> Wi-Fi -> WebSocket (HTTPS fallback) -> RoomTrace server on Render.
-No simulation, no RD-6x, no vitals. See `docs/DEPLOY_RENDER.md` for the server side.
+Real data only, no RD-6x, no vitals. See `docs/DEPLOY_RENDER.md` for the server side.
 
 ## Setup
 1. Copy `credentials_template.h` to `credentials.h` and fill it in (it is git-ignored).

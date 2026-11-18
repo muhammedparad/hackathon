@@ -16,6 +16,7 @@ const DANGER_TYPES = new Set<string>([
   "restricted_zone_entry",
   "restricted_zone_presence",
   "candidate_fall",
+  "left_room",
 ]);
 
 export function isDangerEvent(event: { event_type: EventType | string }): boolean {
@@ -27,6 +28,7 @@ const STICKY_TYPES = new Set<string>([
   "hazard_zone_entry",
   "restricted_zone_entry",
   "candidate_fall",
+  "left_room",
 ]);
 
 /** Which popup (if any) an event gets. Routine events such as entering through a door stay in the log. */

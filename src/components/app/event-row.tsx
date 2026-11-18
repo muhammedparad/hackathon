@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bed,
   AlertOctagon,
   AlertTriangle,
   Clock,
@@ -32,6 +33,8 @@ const MAP: Record<EventType, { icon: LucideIcon; chip: string }> = {
   point_cloud_update: { icon: Activity, chip: "bg-blue-500/10 text-blue-500" },
   restricted_zone_entry: { icon: ShieldAlert, chip: "bg-destructive/15 text-destructive" },
   restricted_zone_exit: { icon: ShieldCheck, chip: "bg-orange-500/15 text-orange-600" },
+  bed_exit: { icon: Bed, chip: "bg-indigo-500/15 text-indigo-600" },
+  left_room: { icon: DoorOpen, chip: "bg-rose-600/20 text-rose-600" },
   restricted_zone_presence: { icon: ShieldAlert, chip: "bg-destructive/15 text-destructive" },
   hazard_zone_entry: { icon: AlertTriangle, chip: "bg-destructive/20 text-destructive" },
   hazard_prolonged_presence: {

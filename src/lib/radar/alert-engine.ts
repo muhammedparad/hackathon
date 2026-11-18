@@ -12,6 +12,8 @@ import {
   type ZoneType,
 } from "./types";
 import type { OccupancyEvent } from "@/lib/firebase/db";
+import type { RoomMode } from "./types";
+import { SLEEP_AFTER_STILL_MS, isAtBed } from "./target-state";
 
 /** Default threshold settings for explainable rule evaluations */
 export const DEFAULT_ALERT_CONFIG = {
@@ -37,6 +39,10 @@ export const DEFAULT_ALERT_CONFIG = {
   fallVanishWindowMs: 8_000,
   /** While someone stays inside a restricted zone, alert again this often (ms) */
   restrictedRepeatMs: 30_000,
+  /** Out of the bed for this long (ms) counts as having got up, not a shift in bed */
+  bedExitDebounceMs: 3_000,
+  /** After getting out of bed, leaving the room within this time (ms) counts as waking up and leaving */
+  leftRoomWindowMs: 30 * 60_000,
   /** Door unexpected entry speed threshold in cm/s */
   doorEntrySpeedCms: 15,
   /** Door inward normal displacement threshold in mm */
@@ -56,6 +62,8 @@ export const DEFAULT_ALERT_CONFIG = {
 };
 
 export interface AlertEngineRoom {
+  /** How the room is watched (default standard) */
+  mode?: RoomMode | undefined;
   id: string;
   name: string;
   width_mm: number;
@@ -104,6 +112,10 @@ export interface TargetTrackingState {
   hazardProlongedAlerted: Set<string>;
   // When each zone last alerted for this target (entry, then repeats while inside)
   zoneRepeatAt: Map<string, number>;
+  // Sleep tracking (patient and solo modes)
+  bedStillSince?: number | null | undefined;
+  asleep?: boolean | undefined;
+  outOfBedSince?: number | null | undefined;
   prolongedAlerted: Set<string>;
 
   // Door proximity tracking
@@ -259,6 +271,7 @@ export class AlertEngine {
   private lastProcessedAt = 0;
   private baselineUntil = 0;
   private recentLosses: Array<{ x: number; y: number; t: number }> = [];
+  private lastWokeAt = 0;
   public routines: ExpectedRoutine[] = [];
 
   constructor(
@@ -376,6 +389,11 @@ export class AlertEngine {
 
       // 5. Evaluate Candidate Fall (Experimental)
       this.evaluateCandidateFall(state, rx, ry, objects, zones, timestamp, simulated, alerts);
+
+      // 6. Patient / solo modes: asleep in bed, then getting up
+      if ((this.room.mode ?? "standard") !== "standard") {
+        this.evaluateSleep(state, timestamp, simulated, alerts);
+      }
     }
 
     // 6. Handle Missing / Stale Targets (scoped to reporting device to prevent cross-device eviction)
@@ -1163,11 +1181,142 @@ export class AlertEngine {
           const lost = toRoomCoords(state.x_mm, state.y_mm, this.room.width_mm);
           this.recentLosses.push({ x: lost.rx, y: lost.ry, t: timestamp });
           this.evaluateVanishedAfterSpike(state, lost.rx, lost.ry, timestamp, simulated, alerts);
+          this.evaluateLeftRoom(state, lost.rx, lost.ry, timestamp, simulated, alerts);
           // Remove target from active state
           this.targets.delete(targetKey);
         }
       }
     }
+  }
+
+  /* ------------------- Modes: sleep, getting out of bed, leaving the room ------------------- */
+  /**
+   * Asleep = at the bed and still for a couple of minutes. Getting out of the bed afterwards (a few seconds
+   * outside it) is a bed exit: an alert in patient mode, only logged in solo mode.
+   */
+  private evaluateSleep(
+    state: TargetTrackingState,
+    timestamp: number,
+    simulated: boolean,
+    alerts: DetectedAlert[],
+  ) {
+    const inBed = isAtBed(this.room, state);
+    const still = Math.abs(state.speed_cms) <= 10;
+
+    if (inBed) {
+      state.outOfBedSince = null;
+      if (!state.asleep) {
+        if (still) {
+          state.bedStillSince ??= timestamp;
+          if (timestamp - state.bedStillSince >= SLEEP_AFTER_STILL_MS) state.asleep = true;
+        } else {
+          state.bedStillSince = null; // moving about on the bed: not asleep yet
+        }
+      }
+      return;
+    }
+
+    state.bedStillSince = null;
+    if (!state.asleep) return;
+    state.outOfBedSince ??= timestamp;
+    if (timestamp - state.outOfBedSince < this.config.bedExitDebounceMs) return;
+
+    state.asleep = false;
+    state.outOfBedSince = null;
+    this.lastWokeAt = timestamp;
+    const patient = this.room.mode === "patient";
+    const coordinates = { x_mm: state.x_mm, y_mm: state.y_mm, z_mm: state.z_mm };
+    alerts.push({
+      room_id: this.room.id,
+      event_type: "bed_exit",
+      severity: patient ? "high" : "info",
+      description: patient
+        ? `Target #${state.targetId} got out of bed`
+        : `Target #${state.targetId} woke up and got out of bed`,
+      target_id: state.targetId,
+      device_id: state.deviceId,
+      sensor_type: state.sensorType,
+      simulated,
+      timestamp: new Date(timestamp).toISOString(),
+      ...coordinates,
+      confidence: "medium",
+      evidence_quality: "Moderate Evidence Quality",
+      evidence: {
+        rule_id: "bed_exit",
+        summary: `The person had been still in bed for at least ${Math.round(SLEEP_AFTER_STILL_MS / 1000)}s and is now out of it.`,
+        measured_value: `Out of bed at (${state.x_mm}, ${state.y_mm}) mm`,
+        threshold_value: `Still in bed >= ${Math.round(SLEEP_AFTER_STILL_MS / 1000)}s, then outside it >= ${Math.round(this.config.bedExitDebounceMs / 1000)}s`,
+        coordinates,
+        confidence: "medium",
+        evidence_quality: "Moderate Evidence Quality",
+        confidence_score: 0.75,
+        limitations:
+          "Anonymous radar detection. A very still sleeper can drop out of tracking, in which case no bed exit is seen.",
+      },
+    });
+  }
+
+  /**
+   * Someone who recently got out of bed disappears at a door or entry zone: they woke up and left the room.
+   * An alert in both patient and solo mode.
+   */
+  private evaluateLeftRoom(
+    state: TargetTrackingState,
+    rx: number,
+    ry: number,
+    timestamp: number,
+    simulated: boolean,
+    alerts: DetectedAlert[],
+  ) {
+    if ((this.room.mode ?? "standard") === "standard") return;
+    if (this.lastWokeAt === 0 || timestamp - this.lastWokeAt > this.config.leftRoomWindowMs) return;
+
+    let via: { name: string; dist: number } | null = null;
+    for (const d of this.room.doors ?? []) {
+      const dist = Math.hypot(rx - d.x_mm, ry - d.y_mm);
+      if (dist <= this.config.entryPointRadiusMm && (!via || dist < via.dist)) {
+        via = { name: d.name, dist };
+      }
+    }
+    for (const z of this.room.zones ?? []) {
+      if (z.type !== "entry" || z.polygon.length < 3) continue;
+      const dist = isPointInPolygon(rx, ry, z.polygon)
+        ? 0
+        : distanceToPolygonBoundary(rx, ry, z.polygon);
+      if (dist <= this.config.entryZoneMarginMm && (!via || dist < via.dist)) {
+        via = { name: z.name, dist };
+      }
+    }
+    if (!via) return; // lost in the middle of the room: more likely a tracking dropout than leaving
+
+    this.lastWokeAt = 0; // one alert per waking
+    const coordinates = { x_mm: state.x_mm, y_mm: state.y_mm, z_mm: state.z_mm };
+    alerts.push({
+      room_id: this.room.id,
+      event_type: "left_room",
+      severity: "high",
+      description: `Target #${state.targetId} woke up and left the room through ${via.name}`,
+      target_id: state.targetId,
+      device_id: state.deviceId,
+      sensor_type: state.sensorType,
+      simulated,
+      timestamp: new Date(timestamp).toISOString(),
+      ...coordinates,
+      confidence: "medium",
+      evidence_quality: "Moderate Evidence Quality",
+      evidence: {
+        rule_id: "left_room",
+        summary: `The person got out of bed and then disappeared at '${via.name}', within ${Math.round(this.config.leftRoomWindowMs / 60_000)} minutes.`,
+        measured_value: `Last seen ${Math.round(via.dist)}mm from ${via.name}`,
+        threshold_value: `Left the room within ${Math.round(this.config.leftRoomWindowMs / 60_000)} min of getting out of bed`,
+        coordinates,
+        confidence: "medium",
+        evidence_quality: "Moderate Evidence Quality",
+        confidence_score: 0.75,
+        limitations:
+          "Anonymous radar detection: it sees the person vanish at the door, not where they went.",
+      },
+    });
   }
 
   /**

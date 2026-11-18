@@ -18,7 +18,7 @@ LD2450 → ESP32-S3 → Wi-Fi → WebSocket /device-ws  (or HTTPS POST /api/publ
                                       └─ Firestore (telemetry, events)
 ```
 
-Everything shown comes from real devices registered to your account. There is no simulation, no demo
+Everything shown comes from real devices registered to your account. There is no built-in
 account and no built-in sample data. A device is shown as _Connected_ only after the server received an
 authenticated heartbeat or telemetry call from it in the last 60 s.
 

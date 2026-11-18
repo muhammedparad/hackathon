@@ -33,6 +33,7 @@ import type {
   RoomZone,
   TrajectoryPoint,
   TrajectorySegment,
+  RoomMode,
 } from "@/lib/radar/types";
 
 export interface Room {
@@ -47,6 +48,7 @@ export interface Room {
   objects?: RoomObject[] | undefined;
   shape?: "rectangle" | "polygon" | undefined;
   polygon_vertices?: Array<{ x_mm: number; y_mm: number }> | undefined;
+  mode?: RoomMode | undefined;
   created_at: string;
   updated_at?: string | null | undefined;
 }
@@ -496,6 +498,7 @@ export const firebaseDb = {
     objects?: RoomObject[] | undefined;
     shape?: "rectangle" | "polygon" | undefined;
     polygon_vertices?: Array<{ x_mm: number; y_mm: number }> | undefined;
+    mode?: RoomMode | undefined;
     user_id: string;
   }): Promise<string> {
     const db = getFirestoreDb();

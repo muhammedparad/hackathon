@@ -1,7 +1,7 @@
 import { FirebaseAuthProvider } from "./providers/firebase";
 import type { AuthProvider, AuthResponse, AuthSession, AuthUser } from "./types";
 
-/** Authentication is Firebase only. There is no local or demo account provider. */
+/** Authentication is Firebase only. There is no local account provider. */
 const firebaseProvider = new FirebaseAuthProvider();
 
 export const authClient: AuthProvider = {

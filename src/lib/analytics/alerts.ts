@@ -6,6 +6,8 @@ const ALERT_EVENT_TYPES = new Set<string>([
   "restricted_zone_entry",
   "restricted_zone_exit",
   "restricted_zone_presence",
+  "bed_exit",
+  "left_room",
   "hazard_zone_entry",
   "hazard_prolonged_presence",
   "unexpected_entry",

@@ -30,7 +30,7 @@ and keeps `firebase-admin` out of the bundle (it is loaded from `node_modules` a
 - `VITE_FIREBASE_*` (public client config): **set before the first build**, they are baked into the browser bundle.
 - `FIREBASE_PROJECT_ID`
 - `FIREBASE_SERVICE_ACCOUNT_KEY`: the whole service-account JSON as one value.
-- There is no demo or built-in device: only devices registered on the Devices page can authenticate.
+- There is no built-in device: only devices registered on the Devices page can authenticate.
 
 ## 3. Register a device
 

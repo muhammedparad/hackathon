@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEMO_MIN_STILL_MS,
+  HR_MIN_STILL_MS,
   StillTracker,
-  demoBlocker,
-  demoHeartRate,
-  demoVitalsFor,
-} from "@/lib/radar/vitals-demo";
+  heartRateBlocker,
+  heartRateFor,
+  heartRatesFor,
+} from "@/lib/radar/heart-rate";
 
 const still = (x = 300, y = 1500, id = 1) => ({ target_id: id, x_mm: x, y_mm: y, speed_cms: 0 });
 
@@ -36,38 +36,38 @@ describe("StillTracker", () => {
   });
 });
 
-describe("demo heart rate rules", () => {
+describe("heart rate rules", () => {
   it("needs the person to be still for 10 s and within 2 m", () => {
-    expect(demoBlocker({ x_mm: 300, y_mm: 1500 }, DEMO_MIN_STILL_MS - 1)).toBe("moving");
-    expect(demoBlocker({ x_mm: 300, y_mm: 1500 }, DEMO_MIN_STILL_MS)).toBeNull();
-    expect(demoBlocker({ x_mm: 1500, y_mm: 1800 }, 60_000)).toBe("too_far"); // 2.34 m
-    expect(demoBlocker({ x_mm: 0, y_mm: 2000 }, 60_000)).toBeNull(); // exactly 2 m
+    expect(heartRateBlocker({ x_mm: 300, y_mm: 1500 }, HR_MIN_STILL_MS - 1)).toBe("moving");
+    expect(heartRateBlocker({ x_mm: 300, y_mm: 1500 }, HR_MIN_STILL_MS)).toBeNull();
+    expect(heartRateBlocker({ x_mm: 1500, y_mm: 1800 }, 60_000)).toBe("too_far"); // 2.34 m
+    expect(heartRateBlocker({ x_mm: 0, y_mm: 2000 }, 60_000)).toBeNull(); // exactly 2 m
   });
 
-  it("shows nothing at all while the demo is switched off", () => {
+  it("shows nothing when it is not enabled", () => {
     const ts = [still()];
     const stillMs = new Map([[1, 60_000]]);
-    expect(demoVitalsFor(false, ts, stillMs, 1000)).toEqual([]);
+    expect(heartRatesFor(false, ts, stillMs, 1000)).toEqual([]);
   });
 
-  it("returns a value only for the people who qualify, and marks it simulated", () => {
+  it("returns a value only for the people who qualify, and marks it not measured", () => {
     const ts = [still(300, 1500, 1), still(300, 1500, 2), still(300, 3000, 3)];
     const stillMs = new Map([
       [1, 15_000],
       [2, 3000],
       [3, 15_000],
     ]);
-    const out = demoVitalsFor(true, ts, stillMs, 5000);
+    const out = heartRatesFor(true, ts, stillMs, 5000);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ target_id: 1, simulated: true });
+    expect(out[0]).toMatchObject({ target_id: 1, measured: false });
     expect(out[0]!.heart_rate_bpm).toBeGreaterThanOrEqual(50);
     expect(out[0]!.heart_rate_bpm).toBeLessThanOrEqual(90);
   });
 
   it("changes slowly and stays in a resting range", () => {
-    let prev = demoHeartRate(1, 0);
+    let prev = heartRateFor(1, 0);
     for (let t = 1000; t < 120_000; t += 1000) {
-      const bpm = demoHeartRate(1, t);
+      const bpm = heartRateFor(1, t);
       expect(bpm).toBeGreaterThanOrEqual(50);
       expect(bpm).toBeLessThanOrEqual(90);
       expect(Math.abs(bpm - prev)).toBeLessThanOrEqual(3);

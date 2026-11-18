@@ -3,11 +3,11 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import {
   createTrajectorySegmentId,
-  generateSimulatedPlaybackData,
   interpolateTargetsAtTime,
   MAX_INTERPOLATION_GAP_MS,
   TARGET_STALE_MS,
 } from "@/lib/radar/playback-engine";
+import { generateSimulatedPlaybackData } from "./playback-fixtures";
 import type { RoomZone, TrajectoryPoint, TrajectorySegment } from "@/lib/radar/types";
 import { firebaseDb } from "@/lib/firebase/db";
 
@@ -53,21 +53,10 @@ describe("Trajectory Storage & Retrieval (Database Layer)", () => {
     await firebaseDb.saveTrajectorySegment(virtualSegment);
     await firebaseDb.saveTrajectorySegment(hardwareSegment);
 
-    // Query virtual only
-    const virtualList = await firebaseDb.getTrajectorySegments({
-      roomId: "room_test_playback",
-      simulated: true,
-    });
-    expect(virtualList.some((s) => s.id === "test_seg_virt_001")).toBe(true);
-    expect(virtualList.some((s) => s.id === "test_seg_hw_001")).toBe(false);
-
-    // Query hardware only
-    const hwList = await firebaseDb.getTrajectorySegments({
-      roomId: "room_test_playback",
-      simulated: false,
-    });
-    expect(hwList.some((s) => s.id === "test_seg_hw_001")).toBe(true);
-    expect(hwList.some((s) => s.id === "test_seg_virt_001")).toBe(false);
+    // Records from old simulation runs are never returned; real device records are
+    const list = await firebaseDb.getTrajectorySegments({ roomId: "room_test_playback" });
+    expect(list.some((s) => s.id === "test_seg_hw_001")).toBe(true);
+    expect(list.some((s) => s.id === "test_seg_virt_001")).toBe(false);
 
     // Query by sensor type
     const rd61List = await firebaseDb.getTrajectorySegments({
@@ -862,7 +851,8 @@ describe("Database Layer Query Scoping & Fail-Safe Scopes", () => {
 describe("Static Firestore Rules Inspection", () => {
   it("verifies firestore.rules strictly contains required immutability & isolation clauses", () => {
     const rulesPath = resolve(__dirname, "../../firestore.rules");
-    const content = readFileSync(rulesPath, "utf-8");
+    // git may check the file out with CRLF on Windows
+    const content = readFileSync(rulesPath, "utf-8").split("\r\n").join("\n");
 
     // No public rules
     expect(content).not.toContain("allow read, write: if true");
@@ -874,9 +864,18 @@ describe("Static Firestore Rules Inspection", () => {
     // Room zones & objects immutability
     expect(content).toContain("request.resource.data.room_id == resource.data.room_id");
 
-    // Occupancy events & trajectories bidirectional provenance & room immutability
-    expect(content).toContain("resource.data.simulated == true");
-    expect(content).toContain("request.resource.data.simulated == true");
+    // Browsers can never create events or trajectories (only the backend does); they can only delete
+    // leftover records flagged simulated by old versions.
+    const events = content.slice(
+      content.indexOf("match /occupancy_events/"),
+      content.indexOf("match /telemetry/"),
+    );
+    const trajectories = content.slice(content.indexOf("match /trajectory_segments/"));
+    expect(events).toContain("allow create: if false;");
+    expect(trajectories).toContain("allow create, update: if false;");
+    expect(events).toContain("resource.data.simulated == true");
+    expect(trajectories).toContain("resource.data.simulated == true");
+    expect(content).not.toContain("request.resource.data.simulated == true");
 
     // Phase 3.2: Hardware Event Acknowledgement Security Rules
     expect(content).toContain(

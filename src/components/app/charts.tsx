@@ -31,12 +31,15 @@ export function AreaSeries({
   y,
   unit,
   height = 220,
+  yDomain,
 }: {
   data: Record<string, unknown>[];
   x: string;
   y: string;
   unit?: string;
   height?: number;
+  /** Optional y-axis domain, e.g. to leave headroom above a flat series. */
+  yDomain?: [number, number | ((dataMax: number) => number)];
 }) {
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -49,7 +52,7 @@ export function AreaSeries({
         </defs>
         <CartesianGrid stroke="var(--grid)" vertical={false} />
         <XAxis dataKey={x} {...axis} minTickGap={20} />
-        <YAxis {...axis} {...(unit ? { unit } : {})} />
+        <YAxis {...axis} {...(unit ? { unit } : {})} {...(yDomain ? { domain: yDomain } : {})} />
         <Tooltip {...tip} />
         <Area
           type="monotone"

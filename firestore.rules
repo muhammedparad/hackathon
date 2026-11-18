@@ -89,34 +89,24 @@ service cloud.firestore {
 
     // 8. Occupancy events: detection, movement, zone entry/exit
     // - Browsers can only read events for rooms they own.
-    // - Browsers can only create simulated events for rooms they own. Real hardware events can only be created by backend Admin SDK.
-    // - For simulated events: room owner can update virtual records (must remain simulated: true and same room_id).
-    // - For hardware events: authenticated room owner can ONLY acknowledge the event:
+    // - Events are created ONLY by the backend (Admin SDK) from real device data. Browsers cannot create any.
+    // - A room owner can ONLY acknowledge an event:
     //   * Only acknowledged, acknowledged_at, acknowledged_by may change.
     //   * acknowledged must be boolean (true).
     //   * acknowledged_by must match the authenticated caller UID (request.auth.uid).
     //   * acknowledged_at must be validated as a server timestamp (request.time).
-    // - Hardware events cannot be converted to simulated or vice versa, room_id cannot change, and telemetry/evidence cannot be mutated.
-    // - Browser deletion is strictly restricted to simulated events.
+    // - Browsers may delete ONLY leftover records flagged simulated (from old versions) to clean them up.
     match /occupancy_events/{eventId} {
       allow read: if isAuthenticated() && (resource == null || isRoomOwner(resource.data.room_id));
-      allow create: if isAuthenticated() &&
-        isRoomOwner(request.resource.data.room_id) &&
-        request.resource.data.simulated == true;
+      allow create: if false;
       allow update: if isAuthenticated() &&
         isRoomOwner(resource.data.room_id) &&
-        request.resource.data.room_id == resource.data.room_id && (
-          // Simulated events: room owner can update virtual events, preserving simulated == true
-          (resource.data.simulated == true && request.resource.data.simulated == true) ||
-          // Hardware events: room owner can ONLY acknowledge with verified identity, boolean type, and server timestamp
-          (resource.data.simulated == false &&
-           request.resource.data.simulated == false &&
-           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acknowledged', 'acknowledged_at', 'acknowledged_by']) &&
-           request.resource.data.acknowledged is bool &&
-           request.resource.data.acknowledged == true &&
-           request.resource.data.acknowledged_by == request.auth.uid &&
-           request.resource.data.acknowledged_at == request.time)
-        );
+        request.resource.data.room_id == resource.data.room_id &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acknowledged', 'acknowledged_at', 'acknowledged_by']) &&
+        request.resource.data.acknowledged is bool &&
+        request.resource.data.acknowledged == true &&
+        request.resource.data.acknowledged_by == request.auth.uid &&
+        request.resource.data.acknowledged_at == request.time;
       allow delete: if isAuthenticated() &&
         isRoomOwner(resource.data.room_id) &&
         resource.data.simulated == true;
@@ -135,21 +125,12 @@ service cloud.firestore {
     }
 
     // 10. Trajectory Segments: Historical movement trails for playback
-    // - Requires authentication and room ownership.
-    // - Browsers can only create/update virtual/simulated trajectory records (simulated: true).
-    // - Browser clients CANNOT write hardware trajectory records (simulated: false).
-    // - Updates cannot change room_id or convert hardware/virtual records.
-    // - Prevents users from accessing another user's room trajectory data.
+    // - Requires authentication and room ownership to read.
+    // - Written ONLY by the backend (Admin SDK) from real device data. Browsers cannot create or update.
+    // - Browsers may delete ONLY leftover records flagged simulated (from old versions) to clean them up.
     match /trajectory_segments/{segId} {
       allow read: if isAuthenticated() && (resource == null || isRoomOwner(resource.data.room_id));
-      allow create: if isAuthenticated() &&
-        isRoomOwner(request.resource.data.room_id) &&
-        request.resource.data.simulated == true;
-      allow update: if isAuthenticated() &&
-        isRoomOwner(resource.data.room_id) &&
-        resource.data.simulated == true &&
-        request.resource.data.simulated == true &&
-        request.resource.data.room_id == resource.data.room_id;
+      allow create, update: if false;
       allow delete: if isAuthenticated() &&
         isRoomOwner(resource.data.room_id) &&
         resource.data.simulated == true;

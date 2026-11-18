@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import {
@@ -10,11 +10,9 @@ import {
   Compass,
   FileSpreadsheet,
   Flame,
-  FlaskConical,
   GitCompare,
   Layers,
   MapPin,
-  RefreshCw,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -30,19 +28,16 @@ import {
   deduplicateEvents,
   detailedOccupancySessions,
   formatDateIso,
-  generateAnalyticsScenarioData,
   generateRoutineInsights,
   occupancySessions,
   occupiedMs,
   parseDateOnly,
   summarizeTrajectories,
   utilisation,
-  type AnalyticsScenario,
   type PeriodComparisonResult,
   type SensorMountTransform,
 } from "@/lib/analytics";
-import { firebaseDb } from "@/lib/firebase/db";
-import { Empty, PageHeader, Panel, Pill, SimTag } from "@/components/app/status";
+import { Empty, PageHeader, Panel, Pill } from "@/components/app/status";
 import { AreaSeries, Bars } from "@/components/app/charts";
 import { MovementHeatmap } from "@/components/analytics/movement-heatmap";
 import { ZoneActivityCard } from "@/components/analytics/zone-activity-card";
@@ -57,13 +52,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/analytics")({
   validateSearch: z.object({
@@ -97,30 +89,15 @@ const RANGES = {
 } as const;
 type RangeKey = keyof typeof RANGES;
 
-const SCENARIOS: { key: AnalyticsScenario; label: string }[] = [
-  { key: "normal_daily", label: "Normal Daily Activity (Morning/Evening)" },
-  { key: "low_activity", label: "Low Room Activity (Sparse Visits)" },
-  { key: "high_activity", label: "High Room Activity (Continuous Turnover)" },
-  { key: "repeated_zone_visits", label: "Repeated Zone Visits (Couch/Desk)" },
-  { key: "multi_target", label: "Multiple Target Movement (Simultaneous)" },
-  { key: "doorway_crossings", label: "Repeated Doorway Crossings (Ingress/Egress)" },
-  { key: "increased_alerts", label: "Increased Alert Activity (Hazards/Falls)" },
-  { key: "period_comparison", label: "Two-Week Historical Baseline Comparison" },
-];
-
 function AnalyticsPage() {
   const search = Route.useSearch();
-  const qc = useQueryClient();
   const { data: rooms = [], isLoading: roomsLoading } = useQuery(roomsQuery);
 
   const [activeTab, setActiveTab] = useState<string>(search.tab ?? "overview");
   const [range, setRange] = useState<RangeKey>("7d");
   const [room, setRoom] = useState<string>(search.room ?? "all");
   const [sensor, setSensor] = useState("all");
-  const [sim, setSim] = useState(true);
   const [compare, setCompare] = useState(false);
-  const [selectedScenario, setSelectedScenario] = useState<AnalyticsScenario>("normal_daily");
-  const [isInjectingScenario, setIsInjectingScenario] = useState(false);
 
   // Custom date range state using unified calendar date formatting
   const todayIso = useMemo(() => formatDateIso(Date.now()), []);
@@ -128,7 +105,7 @@ function AnalyticsPage() {
   const [customFrom, setCustomFrom] = useState(weekAgoIso);
   const [customTo, setCustomTo] = useState(todayIso);
 
-  const now = useMemo(() => Date.now(), [range, sim, customFrom, customTo]); // eslint-disable-line react-hooks/exhaustive-deps
+  const now = useMemo(() => Date.now(), [range, customFrom, customTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Determine window timestamps
   const { from, to, prevFrom, prevTo, windowMs } = useMemo(() => {
@@ -161,11 +138,11 @@ function AnalyticsPage() {
     return rooms.find((r) => r.id === room);
   }, [room, rooms]);
 
-  const activeRoomId = activeRoom?.id ?? "e4a7a8d0-4491-4e78-9584-c817215c0e01";
+  const activeRoomId = activeRoom?.id;
 
   // Query events spanning both previous and current window for comparison
   const eventsQuery = useQuery(
-    analyticsEventsQuery(new Date(prevFrom).toISOString(), sim, room === "all" ? undefined : room),
+    analyticsEventsQuery(new Date(prevFrom).toISOString(), room === "all" ? undefined : room),
   );
 
   // Query trajectory segments for spatial heatmap and zone dwell
@@ -174,7 +151,6 @@ function AnalyticsPage() {
       roomId: activeRoomId,
       fromIso: new Date(prevFrom).toISOString(),
       toIso: new Date(to).toISOString(),
-      simulated: sim ? undefined : false,
       sensorType: sensor === "all" ? undefined : (sensor as "ld2450" | "rd61"),
       limitCount: 500,
     }),
@@ -342,30 +318,6 @@ function AnalyticsPage() {
     rooms,
   ]);
 
-  // Load Preset Synthetic Simulation Scenario
-  const handleLoadScenario = async () => {
-    setIsInjectingScenario(true);
-    try {
-      const scenarioData = generateAnalyticsScenarioData(activeRoomId, selectedScenario);
-      // Save trajectory batch
-      await firebaseDb.saveTrajectoryBatch(scenarioData.segments);
-      // Save event batch
-      for (const e of scenarioData.events) {
-        await firebaseDb.recordEvent(e);
-      }
-      toast.success(`Loaded "${scenarioData.title}" simulated scenario data!`);
-      // Invalidate queries so analytics recalculate immediately
-      await qc.invalidateQueries({ queryKey: ["analytics-events"] });
-      await qc.invalidateQueries({ queryKey: ["trajectories"] });
-    } catch {
-      toast.error("Failed to inject simulation scenario data.");
-    } finally {
-      setIsInjectingScenario(false);
-    }
-  };
-
-  const simTag = sim ? <SimTag /> : null;
-
   return (
     <div className="space-y-6">
       <PageHeader
@@ -451,63 +403,7 @@ function AnalyticsPage() {
             <SelectItem value="rd61">RD-61 (Point-Cloud)</SelectItem>
           </SelectContent>
         </Select>
-
-        {/* Simulated Provenance Switch */}
-        <div className="ml-auto flex items-center gap-2">
-          <Switch id="sim" checked={sim} onCheckedChange={setSim} />
-          <Label htmlFor="sim" className="flex items-center gap-1.5 text-xs cursor-pointer">
-            Include Simulated Data
-            {simTag}
-          </Label>
-        </div>
       </div>
-
-      {/* Preset Scenario Generator Bar (Visible when simulation data is enabled) */}
-      {sim && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sim/30 bg-sim-soft/30 p-3 text-xs">
-          <div className="flex items-center gap-2">
-            <FlaskConical className="size-4 text-sim" />
-            <span className="font-semibold text-foreground">Virtual Scenario Generator:</span>
-            <span className="text-muted-foreground">
-              Inject reproducible multi-day virtual datasets to explore analytics.
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={selectedScenario}
-              onValueChange={(v) => setSelectedScenario(v as AnalyticsScenario)}
-            >
-              <SelectTrigger className="h-8 w-64 bg-card text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SCENARIOS.map((s) => (
-                  <SelectItem key={s.key} value={s.key}>
-                    {s.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              size="sm"
-              variant="default"
-              className="h-8 text-xs bg-sim hover:bg-sim/90 text-white"
-              onClick={handleLoadScenario}
-              disabled={isInjectingScenario}
-            >
-              {isInjectingScenario ? (
-                <>
-                  <RefreshCw className="mr-1.5 size-3 animate-spin" /> Generating...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="mr-1.5 size-3" /> Load Scenario
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
-      )}
 
       {/* Loading or Empty State */}
       {eventsQuery.isLoading || trajectoriesQ.isLoading || roomsLoading ? (
@@ -522,28 +418,10 @@ function AnalyticsPage() {
             icon={<BarChart3 className="size-6" />}
             title="No analytics records found for this period"
           >
-            {sim ? (
-              <div className="space-y-3">
-                <p>
-                  No virtual telemetry recorded for the selected date range. Click{" "}
-                  <strong>Load Scenario</strong> above to instantly inject reproducible household
-                  activity data.
-                </p>
-                <Button
-                  size="sm"
-                  onClick={handleLoadScenario}
-                  disabled={isInjectingScenario}
-                  className="bg-primary text-xs"
-                >
-                  <Sparkles className="mr-1.5 size-3.5" /> Inject Standard Daily Activity Scenario
-                </Button>
-              </div>
-            ) : (
-              <p>
-                No verified hardware radar records found for this window. To review simulated data,
-                turn on “Include Simulated Data” in the controls above.
-              </p>
-            )}
+            <p>
+              No radar records found for this window. Data appears here once a registered device
+              reports to the server.
+            </p>
           </Empty>
         </Panel>
       ) : (
@@ -579,13 +457,11 @@ function AnalyticsPage() {
                 label="Room Utilisation"
                 value={`${analytics.activitySummary.utilisationPct}%`}
                 hint="Proportion of valid observed time room was occupied"
-                sim={sim}
               />
               <KpiCard
                 label="Occupancy Duration"
                 value={`${+(analytics.activitySummary.totalOccupiedMs / 3600_000).toFixed(1)}h`}
                 hint="Total confirmed occupied time in window"
-                sim={sim}
               />
               <KpiCard
                 label="Data Coverage"
@@ -595,31 +471,27 @@ function AnalyticsPage() {
                     ? `${+(analytics.activitySummary.offlineDurationMs / 3600_000).toFixed(1)}h sensor offline/censored`
                     : "100% active telemetry"
                 }
-                sim={sim}
               />
               <KpiCard
                 label="Movement Sessions"
                 value={String(analytics.activitySummary.totalSessions)}
                 hint="Discrete occupied periods"
-                sim={sim}
               />
               <KpiCard
                 label="Avg Session Length"
                 value={`${analytics.activitySummary.avgSessionDurationMinutes}m`}
                 hint={`Median: ${analytics.activitySummary.medianSessionDurationMinutes}m`}
-                sim={sim}
               />
               <KpiCard
                 label="Active Alerts"
                 value={String(analytics.alertsSummary.totalAlerts)}
                 hint={`${analytics.alertsSummary.acknowledgedCount} acknowledged`}
-                sim={sim}
               />
             </div>
 
             {/* Daily Occupancy Trend Chart */}
             <div className="grid gap-6 lg:grid-cols-2">
-              <Panel title={<>Occupancy Over Time {simTag}</>} hint="Occupied minutes per day.">
+              <Panel title={<>Occupancy Over Time</>} hint="Occupied minutes per day.">
                 <AreaSeries
                   data={analytics.dailySummaries}
                   x="label"
@@ -630,7 +502,7 @@ function AnalyticsPage() {
               </Panel>
 
               <Panel
-                title={<>Target Detections vs Movement Events {simTag}</>}
+                title={<>Target Detections vs Movement Events</>}
                 hint="Anonymous reflections vs displacement triggers."
               >
                 <Bars
@@ -648,7 +520,7 @@ function AnalyticsPage() {
             {/* Duration Histogram & Multi-Room Table */}
             <div className="grid gap-6 lg:grid-cols-2">
               <Panel
-                title={<>Occupancy Session Duration Distribution {simTag}</>}
+                title={<>Occupancy Session Duration Distribution</>}
                 hint="Histogram of how long detected room visits lasted."
               >
                 <Bars
@@ -660,7 +532,7 @@ function AnalyticsPage() {
               </Panel>
 
               {/* Multi-Room Breakdown */}
-              <Panel title={<>Room Utilisation Breakdown {simTag}</>}>
+              <Panel title={<>Room Utilisation Breakdown</>}>
                 <div className="overflow-x-auto rounded-lg border">
                   <table className="w-full text-xs">
                     <thead className="bg-muted/40 text-left font-medium text-muted-foreground">
@@ -751,7 +623,7 @@ function AnalyticsPage() {
               title={
                 <div className="flex items-center gap-2">
                   <Flame className="size-4 text-amber-500" />
-                  <span>Room Movement Heatmap {simTag}</span>
+                  <span>Room Movement Heatmap</span>
                 </div>
               }
               hint="Grid-binned spatial density of all recorded radar target points overlaid on the room floor plan."
@@ -762,21 +634,20 @@ function AnalyticsPage() {
                 roomLengthMm={activeRoom?.length_mm ?? 4000}
                 zones={activeRoom?.zones ?? []}
                 doors={activeRoom?.doors ?? []}
-                simulated={sim}
               />
             </Panel>
 
             {/* Zone Activity & Doorway Transit Charts */}
             <div className="grid gap-6 lg:grid-cols-2">
               <Panel
-                title={<>Zone Dwell Times & Visit Share {simTag}</>}
+                title={<>Zone Dwell Times & Visit Share</>}
                 hint="Dwell duration and visit counts inside configured room zones."
               >
                 <ZoneActivityCard zones={analytics.zoneActivity} />
               </Panel>
 
               <Panel
-                title={<>Doorway Entry & Exit Flow {simTag}</>}
+                title={<>Doorway Entry & Exit Flow</>}
                 hint="Directional inward vs outward transits across configured room doorways."
               >
                 <DoorwayActivityCard doorways={analytics.doorwayActivity} />
@@ -826,22 +697,11 @@ function AnalyticsPage() {
   );
 }
 
-function KpiCard({
-  label,
-  value,
-  hint,
-  sim,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  sim: boolean;
-}) {
+function KpiCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-xl border bg-card p-4 shadow-card">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{label}</span>
-        {sim && <SimTag />}
       </div>
       <div className="mt-1.5 font-mono text-xl font-bold tracking-tight text-foreground tabular">
         {value}

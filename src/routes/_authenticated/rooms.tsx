@@ -91,17 +91,8 @@ function RoomsPage() {
     try {
       await firebaseDb.assignDeviceRoom(deviceId, roomId);
     } catch {
-      /* fallback to local cache */
-    }
-    try {
-      const raw = localStorage.getItem("roomtrace_local_devices");
-      if (raw) {
-        const devs = JSON.parse(raw) as Array<{ id: string; room_id?: string | null }>;
-        const updated = devs.map((d) => (d.id === deviceId ? { ...d, room_id: roomId } : d));
-        localStorage.setItem("roomtrace_local_devices", JSON.stringify(updated));
-      }
-    } catch {
-      /* ignore */
+      toast.error("Could not change the device's room. Try again.");
+      return;
     }
     toast.success(roomId ? "Device assigned" : "Device unassigned");
     void qc.invalidateQueries({ queryKey: ["devices"] });
@@ -180,7 +171,7 @@ function RoomsPage() {
                       {r.description || "No description"}
                     </p>
                   </div>
-                  <RoomBadge s={roomState(live.frames[r.id], live.now, live.mode)} />
+                  <RoomBadge s={roomState(live.frames[r.id], live.now)} />
                 </div>
                 <div className="px-5">
                   <LD2450View
@@ -543,8 +534,8 @@ function RoomDialog({ room, onClose }: { room: Partial<Room> | null; onClose: ()
             <TabsContent value="doors" className="space-y-3 pt-2">
               <div className="flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">
-                  Configured entry and exit doorways. Simulated targets enter and leave the room
-                  through these points.
+                  Configured entry and exit doorways. They are used to tell a person entering or
+                  leaving the room from one just walking past.
                 </p>
                 <Button type="button" size="sm" variant="outline" onClick={addDoor}>
                   <Plus className="size-3.5 mr-1" /> Add Door

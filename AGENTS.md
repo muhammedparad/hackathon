@@ -2,9 +2,10 @@
 
 ## Project rules
 
-- Radar data flows through `src/lib/radar/live.tsx` (LiveProvider); simulation and hardware both emit the same frame types from `src/lib/radar/types.ts`, so pages never branch on data source beyond labelling. Why: real ESP32 telemetry must replace simulation without frontend rewrites.
+- Radar data reaches pages only through `src/lib/radar/live.tsx` (LiveProvider): live frames over the WebSocket (`src/lib/live/`), stored telemetry from Firestore as fallback. Why: one source of truth for all pages.
 - LD2450 (targets) and RD-61 (point cloud) stay in separate types, components and payload schemas. Why: the sensors produce different data.
-- Hardware mode never generates data; device "connected" is derived only from `devices.last_seen` set by authenticated device API calls. Why: no fabricated connectivity.
-- Device ingest lives in `src/routes/api/public/device/*`, authenticated by X-Device-Id/X-Device-Key against hashed secrets in `device_credentials` (no client grants). Why: device secrets never reach browsers.
-- Simulated events are stored with `events.simulated = true` and every simulated visual shows `<SimTag />`. Why: simulated and real data must stay distinguishable.
-- Spec asked for Express/Socket.IO; this stack uses TanStack server routes + database realtime instead. Why: platform supports only TanStack Start on edge workers.
+- The app contains NO simulation, demo or mock data: no simulator, scenario generator, demo accounts, built-in devices or seeded rooms. Synthetic fixtures exist only under `src/test/` and must not be imported from anywhere else. Why: everything shown must be real.
+- Device "connected" is derived only from `devices.last_seen` set by authenticated device API calls (heartbeat/telemetry). Why: no fabricated connectivity.
+- Device ingest lives in `src/routes/api/public/device/*`, authenticated by X-Device-Id/X-Device-Key against hashed secrets in `device_credentials` (no client grants). Devices are owned by the verified Firebase uid of whoever registered them. Why: device secrets never reach browsers, and live frames are delivered per owner.
+- Only the server writes events, telemetry and trajectories (Admin SDK). Browsers may only acknowledge events. Why: the record of what happened cannot be forged from a browser.
+- The live WebSocket (`server/routes/live-ws.ts`) needs an always-on Node process (Render, `node-server` build). It authenticates with a verified Firebase ID token; there is no unsigned or dev mode. Why: edge/serverless hosts cannot hold WebSockets, and frames must reach only their owner.

@@ -4,8 +4,7 @@ import { useState } from "react";
 import { Boxes, Radar, ScatterChart } from "lucide-react";
 import { roomsQuery } from "@/lib/data";
 import { isStale, useLive } from "@/lib/radar/live";
-import { Empty, PageHeader, Panel, Pill, SimTag, timeAgo } from "@/components/app/status";
-import { ModeToggle, SimControls } from "@/components/app/sim-controls";
+import { Empty, PageHeader, Panel, Pill, timeAgo } from "@/components/app/status";
 import { LD2450View } from "@/components/radar/ld2450-view";
 import { RD61View } from "@/components/radar/rd61-view";
 import { Button } from "@/components/ui/button";
@@ -36,7 +35,6 @@ function RadarPage() {
   const [showObjects, setShowObjects] = useState(true);
   const [persistence, setPersistence] = useState(6);
   const f = room ? live.frames[room.id] : undefined;
-  const sim = live.mode === "simulation";
   const target = f?.ld?.targets.find((t) => t.target_id === sel);
 
   if (!isLoading && !room)
@@ -64,12 +62,6 @@ function RadarPage() {
       <PageHeader
         title="Radar Visualization"
         description="The two sensors produce different data and are shown separately."
-        actions={
-          <>
-            <ModeToggle />
-            <SimControls roomId={room?.id ?? null} />
-          </>
-        }
       />
       <Tabs defaultValue="ld2450">
         <TabsList className="mb-4">
@@ -83,11 +75,7 @@ function RadarPage() {
         <TabsContent value="ld2450">
           <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
             <Panel
-              title={
-                <span className="flex items-center gap-2">
-                  Target coordinates {sim && <SimTag />}
-                </span>
-              }
+              title={<span className="flex items-center gap-2">Target coordinates</span>}
               subtitle="Scroll to zoom, drag to pan, click a target to inspect"
               action={
                 <>
@@ -132,13 +120,10 @@ function RadarPage() {
                   onSelect={setSel}
                   showTrails={trails}
                   stale={isStale(f.ld.timestamp, live.now)}
-                  door={sim}
                 />
               ) : (
                 <Empty icon={<Radar className="size-5" />} title="No LD2450 frames">
-                  {sim
-                    ? "Simulation is stopped or the sensor is disconnected."
-                    : "No hardware LD2450 telemetry for this room yet."}
+                  No LD2450 telemetry for this room yet.
                 </Empty>
               )}
               <p className="mt-3 text-xs text-muted-foreground">
@@ -176,7 +161,6 @@ function RadarPage() {
                         ? "Moving away from the sensor."
                         : "Moving towards the sensor."}
                   </div>
-                  {sim && <SimTag />}
                 </dl>
               ) : (
                 <p className="py-6 text-center text-sm text-muted-foreground">
@@ -191,7 +175,7 @@ function RadarPage() {
             <Panel
               title={
                 <span className="flex flex-wrap items-center gap-2">
-                  RD-61 Point cloud (top-down) {sim && <SimTag />}
+                  RD-61 Point cloud (top-down)
                   <Pill t="warning">Experimental · Protocol Unverified (FW #2967)</Pill>
                 </span>
               }
@@ -245,9 +229,7 @@ function RadarPage() {
                 />
               ) : (
                 <Empty icon={<ScatterChart className="size-5" />} title="No RD-61 frames">
-                  {sim
-                    ? "Simulation is stopped or the sensor is disconnected."
-                    : "No hardware RD-61 point cloud for this room yet."}
+                  No RD-61 point cloud for this room yet.
                 </Empty>
               )}
             </Panel>

@@ -5,6 +5,8 @@ import { getAdminFirestore } from "@/lib/firebase/admin.server";
 import { AlertEngine, type AlertEngineRoom } from "@/lib/radar/alert-engine";
 import type { Firestore } from "firebase-admin/firestore";
 import { publishDeviceSeen, publishLiveFrame } from "@/lib/live/publish.server";
+import { TrajectoryRecorder } from "@/lib/radar/trajectory-recorder";
+import { syncSensorStatus } from "@/lib/sensor-status.server";
 
 /** Cache lifecycle thresholds and capacity bounds */
 export const DEDUP_TTL_MS = 60_000; // 60s TTL window for retransmission deduplication
@@ -37,6 +39,9 @@ export interface OccupancyStateEntry {
 // In-memory occupancy cache for transition detection (roomId -> state)
 const lastOccupancyState = new Map<string, OccupancyStateEntry>();
 
+// Turns real LD2450 frames into stored trajectory segments (Playback + spatial analytics)
+const trajectoryRecorder = new TrajectoryRecorder();
+
 // Frame deduplication cache (deviceId -> entry)
 const deviceLastFrame = new Map<string, DedupEntry>();
 
@@ -48,6 +53,7 @@ export function _resetTelemetryCache() {
   lastOccupancyState.clear();
   deviceLastFrame.clear();
   roomAlertEngines.clear();
+  trajectoryRecorder.reset();
 }
 
 /** Diagnostic stats for in-memory telemetry caches */
@@ -351,6 +357,36 @@ export const Route = createFileRoute("/api/public/device/telemetry")({
                 }
                 await alertBatch.commit();
               }
+            }
+
+            // Real trajectories for Playback and spatial analytics. Only the server writes these.
+            if (
+              payload.data.sensor_type === "ld2450" &&
+              device.room_id &&
+              payload.data.sensor_status !== "disconnected"
+            ) {
+              const segments = trajectoryRecorder.ingest(
+                { roomId: device.room_id, deviceId: device.id },
+                payload.data.targets,
+                new Date(ts).getTime(),
+              );
+              if (segments.length > 0) {
+                const segBatch = db.batch();
+                for (const { id, ...segment } of segments) {
+                  segBatch.set(db.collection("trajectory_segments").doc(id), segment);
+                }
+                await segBatch.commit();
+              }
+            }
+
+            // Sensor status exactly as the device reports it (never assumed).
+            if (payload.data.sensor_type === "ld2450") {
+              await syncSensorStatus(
+                db,
+                device,
+                "ld2450",
+                payload.data.sensor_status === "disconnected" ? "disconnected" : "connected",
+              ).catch((err) => console.warn("[Telemetry] sensor status sync failed:", err));
             }
 
             // Detect room occupancy transitions and sensor state distinct from vacancy

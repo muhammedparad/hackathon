@@ -30,8 +30,6 @@ interface Props {
   stale?: boolean;
   /** Rotating scan wedge. Off in compact previews. */
   sweep?: boolean;
-  /** Draw the door opening the simulation walks targets through. */
-  door?: boolean;
   doors?: Door[] | undefined;
   zones?: RoomZone[] | undefined;
   objects?: RoomObject[] | undefined;
@@ -51,7 +49,6 @@ export function LD2450View({
   compact,
   stale,
   sweep = true,
-  door = false,
   doors,
   zones,
   objects,
@@ -166,13 +163,7 @@ export function LD2450View({
           </clipPath>
 
           {/* 3D elevation drop shadows for furniture and avatars (from video) */}
-          <filter
-            id={`furniture-3d-shadow-${uid}`}
-            x="-25%"
-            y="-25%"
-            width="150%"
-            height="160%"
-          >
+          <filter id={`furniture-3d-shadow-${uid}`} x="-25%" y="-25%" width="150%" height="160%">
             <feDropShadow
               dx={0}
               dy={28}
@@ -181,13 +172,7 @@ export function LD2450View({
               floodOpacity={0.16}
             />
           </filter>
-          <filter
-            id={`pillow-3d-shadow-${uid}`}
-            x="-35%"
-            y="-35%"
-            width="170%"
-            height="180%"
-          >
+          <filter id={`pillow-3d-shadow-${uid}`} x="-35%" y="-35%" width="170%" height="180%">
             <feDropShadow
               dx={0}
               dy={12}
@@ -196,13 +181,7 @@ export function LD2450View({
               floodOpacity={0.13}
             />
           </filter>
-          <filter
-            id={`person-3d-shadow-${uid}`}
-            x="-40%"
-            y="-40%"
-            width="180%"
-            height="180%"
-          >
+          <filter id={`person-3d-shadow-${uid}`} x="-40%" y="-40%" width="180%" height="180%">
             <feDropShadow
               dx={0}
               dy={14}
@@ -249,12 +228,7 @@ export function LD2450View({
             <stop offset="100%" stopColor="#3B82F6" stopOpacity={0} />
           </radialGradient>
           {/* Subtle architectural floor tiles pattern (matching video) */}
-          <pattern
-            id={`floor-tiles-${uid}`}
-            width={600}
-            height={300}
-            patternUnits="userSpaceOnUse"
-          >
+          <pattern id={`floor-tiles-${uid}`} width={600} height={300} patternUnits="userSpaceOnUse">
             <rect width={600} height={300} fill="#FCFDFF" />
             <path
               d="M 0 0 L 600 0 M 0 150 L 600 150 M 0 300 L 600 300 M 300 0 L 300 150 M 0 150 L 0 300 M 600 150 L 600 300"
@@ -480,8 +454,7 @@ export function LD2450View({
                 obj.type === "sofa" ||
                 obj.name.toLowerCase().includes("sofa") ||
                 obj.name.toLowerCase().includes("couch");
-              const isTable =
-                obj.type === "table" || obj.name.toLowerCase().includes("nightstand");
+              const isTable = obj.type === "table" || obj.name.toLowerCase().includes("nightstand");
               const w = obj.width_mm;
               const l = obj.length_mm;
 
@@ -845,33 +818,7 @@ export function LD2450View({
                     </g>
                   );
                 })
-              : door && (
-                  <g>
-                    <rect
-                      x={doorX - doorW / 2}
-                      y={L - 40}
-                      width={doorW}
-                      height={80}
-                      className="fill-radar-floor"
-                    />
-                    <path
-                      d={`M ${doorX - doorW / 2} ${L} A ${doorW} ${doorW} 0 0 1 ${doorX - doorW / 2} ${L - doorW}`}
-                      className="fill-none stroke-radar-wall"
-                      strokeWidth={7}
-                      strokeDasharray="40 40"
-                      opacity={0.5}
-                    />
-                    <text
-                      x={doorX}
-                      y={L - 90}
-                      textAnchor="middle"
-                      fontSize={110}
-                      className="fill-foreground/60 font-mono"
-                    >
-                      door
-                    </text>
-                  </g>
-                )}
+              : null}
           </g>
         )}
 

@@ -1,19 +1,13 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import {
-  authClient,
-  getAuthProviderType,
-  setAuthProviderType,
-  getAvailableProviders,
-  type ProviderType,
-} from "@/lib/auth";
+import { authClient } from "@/lib/auth";
 import { Logo } from "@/components/app/logo";
 import { RadarHero } from "@/components/app/hero";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Flame, ShieldCheck, Sparkles } from "lucide-react";
+import { Flame, ShieldCheck } from "lucide-react";
 
 export const Route = createFileRoute("/auth")({
   head: () => ({
@@ -33,8 +27,6 @@ function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [currentProvider, setCurrentProvider] = useState<ProviderType>(getAuthProviderType());
-  const providers = getAvailableProviders();
 
   useEffect(() => {
     void authClient.getUser().then((user) => {
@@ -49,12 +41,6 @@ function AuthPage() {
 
     return () => unsubscribe();
   }, [navigate]);
-
-  const handleProviderChange = (newProvider: ProviderType) => {
-    setAuthProviderType(newProvider);
-    setCurrentProvider(newProvider);
-    toast.success(`Switched auth provider to: ${newProvider.toUpperCase()}`);
-  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,27 +78,6 @@ function AuthPage() {
     }
   };
 
-  const quickDemoLogin = async () => {
-    setBusy(true);
-    try {
-      // Ensure we use local provider for guaranteed instant demo login
-      if (currentProvider !== "local") {
-        handleProviderChange("local");
-      }
-      const { user, error } = await authClient.signInWithPassword({
-        email: "demo@roomtrace.io",
-        password: "password123",
-      });
-      if (error) throw error;
-      toast.success("Signed in as Demo User!");
-      if (user) navigate({ to: "/overview" });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Demo sign in failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
       <div className="flex flex-col justify-center px-6 py-12 sm:px-12">
@@ -123,19 +88,9 @@ function AuthPage() {
               <Logo />
               <span className="text-lg font-semibold tracking-tight">RoomTrace</span>
             </div>
-            {/* Active Provider Pill */}
             <div className="flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-              {currentProvider === "firebase" ? (
-                <>
-                  <Flame className="size-3 text-amber-500" />
-                  <span>Firebase Cloud</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="size-3 text-primary" />
-                  <span>Local Demo</span>
-                </>
-              )}
+              <Flame className="size-3 text-amber-500" />
+              <span>Firebase</span>
             </div>
           </div>
 
@@ -146,31 +101,11 @@ function AuthPage() {
             See the room. Understand the movement. Without cameras.
           </p>
 
-          {/* Quick Demo Access Button */}
-          <div className="mt-5">
-            <Button
-              type="button"
-              variant="secondary"
-              className="w-full gap-2 border bg-primary/10 text-primary hover:bg-primary/20"
-              onClick={quickDemoLogin}
-              disabled={busy}
-            >
-              <Sparkles className="size-4" />
-              1-Click Demo Access
-            </Button>
-          </div>
-
-          <div className="my-4 flex items-center gap-3 text-xs text-foreground/50">
-            <div className="h-px flex-1 bg-border" />
-            <span>or continue with credentials</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
-
           {/* Social Auth */}
           <Button
             type="button"
             variant="outline"
-            className="w-full gap-2"
+            className="mt-5 w-full gap-2"
             onClick={google}
             disabled={busy}
           >
@@ -212,9 +147,6 @@ function AuthPage() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <Label htmlFor="pw">Password</Label>
-                {mode === "signin" && (
-                  <span className="text-xs text-muted-foreground">Demo: password123</span>
-                )}
               </div>
               <Input
                 id="pw"
@@ -243,35 +175,6 @@ function AuthPage() {
               {mode === "signin" ? "Create an account" : "Sign in"}
             </button>
           </p>
-
-          {/* Auth Provider Switching Section */}
-          <div className="mt-8 rounded-lg border bg-muted/30 p-3 text-xs">
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-semibold text-muted-foreground">Auth Provider:</span>
-              <span className="font-mono text-[11px] font-semibold text-primary">
-                {currentProvider.toUpperCase()}
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-1">
-              {providers.map((p) => (
-                <button
-                  key={p.type}
-                  type="button"
-                  onClick={() => handleProviderChange(p.type)}
-                  className={`rounded px-2 py-1 text-center font-medium transition-colors ${
-                    currentProvider === p.type
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "bg-background/80 hover:bg-background text-muted-foreground hover:text-foreground border"
-                  }`}
-                >
-                  {p.type === "local" ? "Dynamic" : p.type === "firebase" ? "Firebase" : "Supabase"}
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              {providers.find((p) => p.type === currentProvider)?.description}
-            </p>
-          </div>
         </div>
       </div>
 

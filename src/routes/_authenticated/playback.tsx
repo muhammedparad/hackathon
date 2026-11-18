@@ -18,13 +18,9 @@ import {
 } from "lucide-react";
 import { roomsQuery, type Room } from "@/lib/data";
 import { firebaseDb } from "@/lib/firebase/db";
-import {
-  generateSimulatedPlaybackData,
-  interpolateTargetsAtTime,
-  type InterpolatedFrame,
-} from "@/lib/radar/playback-engine";
+import { interpolateTargetsAtTime, type InterpolatedFrame } from "@/lib/radar/playback-engine";
 import type { TrajectorySegment } from "@/lib/radar/types";
-import { Empty, PageHeader, Panel, Pill, SimTag } from "@/components/app/status";
+import { Empty, PageHeader, Panel, Pill } from "@/components/app/status";
 import { LD2450View } from "@/components/radar/ld2450-view";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,7 +82,6 @@ function PlaybackPage() {
   const searchEpoch = search.t ? Number(search.t) : null;
   const { data: rooms = [], isLoading: roomsLoading } = useQuery(roomsQuery);
   const [selectedRoomId, setSelectedRoomId] = useState<string>(search.roomId ?? "");
-  const [dataSource, setDataSource] = useState<"virtual" | "hardware">("virtual");
   const [showZones, setShowZones] = useState(true);
   const [showObjects, setShowObjects] = useState(true);
   const [showTrails, setShowTrails] = useState(true);
@@ -170,10 +165,8 @@ function PlaybackPage() {
     if (!currentRoom) return;
     setIsLoadingSegments(true);
     try {
-      const isSim = dataSource === "virtual";
       const loaded = await firebaseDb.getTrajectorySegments({
         roomId: currentRoom.id,
-        simulated: isSim,
         fromIso,
         toIso,
         limitCount: 500,
@@ -196,27 +189,11 @@ function PlaybackPage() {
       setIsLoadingSegments(false);
       setIsPlaying(false);
     }
-  }, [currentRoom, dataSource, fromIso, toIso, searchEpoch]);
+  }, [currentRoom, fromIso, toIso, searchEpoch]);
 
   useEffect(() => {
     void loadTrajectories();
   }, [loadTrajectories]);
-
-  // Scenario generator for quick testing on selected date
-  const loadScenario = async (scenario: "morning_routine" | "balcony_hazard" | "dual_crossing") => {
-    if (!currentRoom) return;
-    setIsLoadingSegments(true);
-    try {
-      const demo = generateSimulatedPlaybackData(currentRoom.id, scenario, selectedDateNoonEpoch);
-      setSegments(demo);
-      setCurrentTime(demo[0]?.start_epoch ?? 0);
-      await firebaseDb.saveTrajectoryBatch(demo);
-      setDataSource("virtual");
-    } finally {
-      setIsLoadingSegments(false);
-      setIsPlaying(false);
-    }
-  };
 
   // Interpolated targets at currentTime
   const interpolatedFrame: InterpolatedFrame = useMemo(() => {
@@ -321,23 +298,6 @@ function PlaybackPage() {
       <PageHeader
         title="Route Playback"
         description="Inspect historical target trajectories, movement trails, and zone dwells across time."
-        actions={
-          <div className="flex items-center gap-2">
-            {dataSource === "virtual" && <SimTag />}
-            <Select
-              value={dataSource}
-              onValueChange={(v: "virtual" | "hardware") => setDataSource(v)}
-            >
-              <SelectTrigger className="h-9 w-40 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="virtual">Virtual Simulation</SelectItem>
-                <SelectItem value="hardware">Hardware Telemetry</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        }
       />
 
       {/* TOOLBAR CONTROLS */}
@@ -372,39 +332,6 @@ function PlaybackPage() {
               className="h-8 w-36 text-xs font-mono"
             />
           </div>
-
-          {/* Quick Scenario Picker (for virtual playback) */}
-          {dataSource === "virtual" && (
-            <div className="flex items-center gap-1.5 pl-2 border-l">
-              <span className="text-xs font-medium text-muted-foreground flex items-center gap-1">
-                <Sparkles className="size-3.5 text-primary" /> Preset:
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => loadScenario("morning_routine")}
-              >
-                Routine
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => loadScenario("balcony_hazard")}
-              >
-                Balcony Hazard
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => loadScenario("dual_crossing")}
-              >
-                Dual Crossing
-              </Button>
-            </div>
-          )}
         </div>
 
         {/* Display Toggles */}
@@ -427,22 +354,6 @@ function PlaybackPage() {
               Furniture
             </Label>
           </div>
-          {dataSource === "virtual" && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10"
-              onClick={async () => {
-                if (currentRoom) {
-                  await firebaseDb.clearSimulatedTrajectories(currentRoom.id);
-                  await loadTrajectories();
-                }
-              }}
-              title="Clear virtual trajectories"
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
-          )}
         </div>
       </div>
 
@@ -450,11 +361,7 @@ function PlaybackPage() {
       <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
         {/* Main Floor Plan Map */}
         <Panel
-          title={
-            <span className="flex items-center gap-2">
-              Route scrubber map {dataSource === "virtual" && <SimTag />}
-            </span>
-          }
+          title={<span className="flex items-center gap-2">Route scrubber map</span>}
           subtitle="Top-down visual route playback with trails, zone collision, and dwell tracking"
           action={
             <Pill t={interpolatedFrame.activeCount > 0 ? "success" : "neutral"}>
@@ -477,7 +384,6 @@ function PlaybackPage() {
                 showZones={showZones}
                 showObjects={showObjects}
                 showTrails={showTrails}
-                door={dataSource === "virtual"}
               />
 
               {/* Timestamp overlay */}
@@ -495,20 +401,8 @@ function PlaybackPage() {
                   <Calendar className="size-8 text-muted-foreground mb-2" />
                   <p className="font-semibold text-sm">No trajectory records for {selectedDate}</p>
                   <p className="text-xs text-muted-foreground max-w-sm mt-1">
-                    {dataSource === "virtual"
-                      ? "Generate simulated trajectory data using one of the preset scenarios in the toolbar above."
-                      : "No hardware radar telemetry or trajectories were stored for this room on this date."}
+                    No radar trajectories were stored for this room on this date.
                   </p>
-                  {dataSource === "virtual" && (
-                    <Button
-                      size="sm"
-                      className="mt-3 text-xs"
-                      onClick={() => loadScenario("morning_routine")}
-                    >
-                      <Sparkles className="size-3.5 mr-1.5" />
-                      Generate Sample Route
-                    </Button>
-                  )}
                 </div>
               )}
             </div>

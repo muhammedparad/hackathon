@@ -5,4 +5,3 @@ export * from "./spatial";
 export * from "./routines";
 export * from "./alerts";
 export * from "./comparison";
-export * from "./scenarios";

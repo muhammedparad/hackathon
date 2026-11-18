@@ -1,3 +1,5 @@
+// TEST FIXTURE ONLY: synthetic datasets for unit-testing the analytics calculations.
+// Not part of the app: nothing under src/ outside src/test may import this.
 import type { OccupancyEvent } from "@/lib/firebase/db";
 import type {
   AlertSeverity,

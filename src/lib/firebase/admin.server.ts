@@ -93,22 +93,19 @@ export function getAdminAuth(): Auth | null {
   }
 }
 
-export async function verifyFirebaseIdToken(token: string) {
+/**
+ * Verifies a Firebase ID token with the Admin SDK and returns the user's uid.
+ * Strict by design: with no Admin credentials, or on any verification failure, it returns null.
+ * (It never decodes a token without checking its signature.)
+ */
+export async function verifyUserToken(token: string): Promise<{ uid: string } | null> {
+  if (!token || token.length > 4096) return null;
   const auth = getAdminAuth();
-  if (!auth) {
-    // If Admin SDK auth is unavailable, decode payload claims for development fallback
-    try {
-      const parts = token.split(".");
-      if (parts.length === 3 && parts[1]) {
-        const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
-        if (payload.sub || payload.user_id) {
-          return { uid: payload.sub || payload.user_id, email: payload.email };
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    throw new Error("Firebase Admin Auth unavailable to verify token");
+  if (!auth) return null;
+  try {
+    const decoded = await auth.verifyIdToken(token);
+    return decoded.uid ? { uid: decoded.uid } : null;
+  } catch {
+    return null;
   }
-  return auth.verifyIdToken(token);
 }

@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import type { EventType } from "@/lib/radar/types";
 import { cn } from "@/lib/utils";
-import { SimTag, timeAgo } from "./status";
+import { timeAgo } from "./status";
 
 const MAP: Record<EventType, { icon: LucideIcon; chip: string }> = {
   target_detected: { icon: Radio, chip: "bg-primary/10 text-primary" },
@@ -49,7 +49,6 @@ export interface EventLike {
   event_type: EventType;
   description: string;
   timestamp: number;
-  simulated: boolean;
   label: string;
 }
 
@@ -84,7 +83,6 @@ export function EventRow({
         <div className="font-mono text-[10px] tabular leading-tight text-muted-foreground">
           {timeAgo(event.timestamp, now)}
         </div>
-        {event.simulated && <SimTag className="mt-1" />}
       </div>
     </li>
   );

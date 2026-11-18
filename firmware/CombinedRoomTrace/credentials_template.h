@@ -19,5 +19,5 @@
 
 // Device Credentials generated from RoomTrace Dashboard > Devices > Register Device
 // The secret key is hashed with SHA-256 server-side. Firebase Admin secrets NEVER exist on the ESP32!
-#define ROOMTRACE_DEVICE_ID  "esp32-lab-01"
-#define ROOMTRACE_DEVICE_KEY "rt_demo_secret_key_12345"
+#define ROOMTRACE_DEVICE_ID  "your-device-id"
+#define ROOMTRACE_DEVICE_KEY "your-device-secret"

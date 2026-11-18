@@ -1,6 +1,5 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
-import { getDatabase, type Database } from "firebase/database";
 
 export interface FirebaseConfig {
   apiKey?: string | undefined;
@@ -9,7 +8,6 @@ export interface FirebaseConfig {
   storageBucket?: string | undefined;
   messagingSenderId?: string | undefined;
   appId?: string | undefined;
-  databaseURL?: string | undefined;
 }
 
 export function getFirebaseConfig(): FirebaseConfig {
@@ -24,11 +22,6 @@ export function getFirebaseConfig(): FirebaseConfig {
     storageBucket: env["VITE_FIREBASE_STORAGE_BUCKET"],
     messagingSenderId: env["VITE_FIREBASE_MESSAGING_SENDER_ID"],
     appId: env["VITE_FIREBASE_APP_ID"],
-    databaseURL:
-      env["VITE_FIREBASE_DATABASE_URL"] ||
-      (env["VITE_FIREBASE_PROJECT_ID"]
-        ? `https://${env["VITE_FIREBASE_PROJECT_ID"]}-default-rtdb.asia-southeast1.firebasedatabase.app`
-        : undefined),
   };
 }
 
@@ -39,7 +32,6 @@ export function isFirebaseConfigured(): boolean {
 
 let appInstance: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
-let rtdbInstance: Database | null = null;
 
 export function getFirebaseApp(): FirebaseApp | null {
   if (appInstance) return appInstance;
@@ -68,20 +60,6 @@ export function getFirebaseAuth(): Auth | null {
     return authInstance;
   } catch (err) {
     console.warn("[Firebase] Auth initialization error:", err);
-    return null;
-  }
-}
-
-export function getFirebaseRtdb(): Database | null {
-  if (rtdbInstance) return rtdbInstance;
-  const app = getFirebaseApp();
-  if (!app) return null;
-  const config = getFirebaseConfig();
-  try {
-    rtdbInstance = config.databaseURL ? getDatabase(app, config.databaseURL) : getDatabase(app);
-    return rtdbInstance;
-  } catch (err) {
-    console.warn("[Firebase RTDB] Initialization error:", err);
     return null;
   }
 }

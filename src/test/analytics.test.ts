@@ -12,7 +12,6 @@ import {
   detailedOccupancySessions,
   evaluateBaselineSufficiency,
   evaluateConfiguredRoutines,
-  generateAnalyticsScenarioData,
   generateRoutineInsights,
   identifyRecurringPatterns,
   isAlertEvent,
@@ -35,6 +34,7 @@ import {
   type CoordinateFrame,
   type SensorMountTransform,
 } from "@/lib/analytics";
+import { generateAnalyticsScenarioData } from "./analytics-scenarios";
 import {
   deviceConnection,
   telemetryBodySchema,

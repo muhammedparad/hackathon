@@ -27,7 +27,7 @@ and keeps `firebase-admin` out of the bundle (it is loaded from `node_modules` a
 - `VITE_FIREBASE_*` (public client config): **set before the first build**, they are baked into the browser bundle.
 - `FIREBASE_PROJECT_ID`
 - `FIREBASE_SERVICE_ACCOUNT_KEY`: the whole service-account JSON as one value.
-- Do **not** set `ROOMTRACE_ALLOW_DEMO_DEVICES`. With it unset, the built-in demo device key is rejected.
+- There is no demo or built-in device: only devices registered on the Devices page can authenticate.
 
 ## 3. Register a device
 1. Log in to the deployed site > **Devices** > add a device and assign it to a room.
@@ -56,14 +56,14 @@ The website gets live radar frames pushed over a WebSocket at `/live-ws` (Nitro 
 - Messages are defined in `src/lib/live/protocol.ts`.
 
 ### Trying it locally
-`vite dev` does **not** serve the WebSocket (Nitro only runs in production builds). Use the built server:
+`vite dev` does **not** serve the WebSocket (Nitro only runs in production builds). Use the built server, with
+your `.env` and `FIREBASE_SERVICE_ACCOUNT_KEY` set:
 ```powershell
 $env:RENDER = "true"; npm run build; Remove-Item Env:RENDER
 $env:PORT = "8080"; node .output/server/index.mjs
 ```
-Without Firebase Admin credentials the server cannot verify tokens, so the socket stays closed and the page
-falls back to the Firestore listeners. For a pure local test only, `ROOMTRACE_ALLOW_DEMO_DEVICES=true` lets the
-socket accept an unsigned token. Never set it on Render.
+There is no unsigned or dev mode: without Firebase Admin credentials the server cannot verify browser tokens
+or device keys, so the socket stays closed and device calls return 503.
 
 ## Known limits (to fix next)
 - WebSocket delivery is in memory and single-instance. A page that connects after a frame was sent sees it

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerFixtureDevices } from "./device-fixtures";
 import { LiveHub, getLiveHub } from "@/lib/live/hub.server";
 import { createLiveSession } from "@/lib/live/session.server";
 import { connectLive, type LiveConnState } from "@/lib/live/ws-client";
@@ -18,6 +19,10 @@ function fakePeer(id: string) {
 function parsed(peer: { sent: string[] }): LiveServerMessage[] {
   return peer.sent.map((s) => JSON.parse(s) as LiveServerMessage);
 }
+
+beforeEach(async () => {
+  await registerFixtureDevices();
+});
 
 describe("LiveHub", () => {
   it("delivers only to peers of the same owner", () => {
@@ -253,7 +258,7 @@ describe("browser live client", () => {
 });
 
 describe("device ingest publishes to the owner's live socket", () => {
-  const DEMO_USER = "usr_admin_default"; // owner of the built-in demo device (test runner only)
+  const DEMO_USER = "usr_test_owner"; // owner of the built-in demo device (test runner only)
   const DEMO_DEVICE_DOC = "d1a1b1c1-1111-2222-3333-444455556666";
   const DEMO_ROOM = "e4a7a8d0-4491-4e78-9584-c817215c0e01";
   const peer = fakePeer("browser-1");
@@ -268,7 +273,7 @@ describe("device ingest publishes to the owner's live socket", () => {
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify(body),
       }),

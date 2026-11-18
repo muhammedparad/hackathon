@@ -11,7 +11,6 @@ interface MovementHeatmapProps {
   roomLengthMm: number;
   zones?: RoomZone[];
   doors?: Door[];
-  simulated?: boolean;
 }
 
 export function MovementHeatmap({

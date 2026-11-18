@@ -1,14 +1,19 @@
+import { useId } from "react";
+
 export function Logo({ className = "size-8" }: { className?: string }) {
+  // Each instance needs its own gradient id: a gradient defined inside a hidden (display: none) copy
+  // of the logo would not paint for the visible copy that references the same id.
+  const gid = `logo-grad-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   return (
     <svg viewBox="0 0 36 36" className={className} aria-hidden fill="none">
       <defs>
-        <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <linearGradient id={gid} x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stopColor="#2563EB" />
           <stop offset="100%" stopColor="#1D4ED8" />
         </linearGradient>
       </defs>
       {/* Outer shield container */}
-      <rect width="36" height="36" rx="10" fill="url(#shieldGrad)" />
+      <rect width="36" height="36" rx="10" fill={`url(#${gid})`} />
       {/* Radar waves / Silver Shield emblem */}
       <path
         d="M10 24C12 21 15 19 18 19C21 19 24 21 26 24"

@@ -7,6 +7,7 @@ import { Copy, Cpu, KeyRound, Plus, Settings2, Trash2 } from "lucide-react";
 import { firebaseDb } from "@/lib/firebase/db";
 import { devicesQuery, roomsQuery, sensorsQuery, type Sensor } from "@/lib/data";
 import { registerDevice, rotateDeviceSecret } from "@/lib/devices.functions";
+import { authClient } from "@/lib/auth";
 import { useLive } from "@/lib/radar/live";
 import { deviceConnection } from "@/lib/radar/types";
 import { ConnBadge, Empty, Hint, PageHeader, Panel, timeAgo } from "@/components/app/status";
@@ -77,19 +78,8 @@ function DevicesPage() {
     try {
       await firebaseDb.deleteDevice(id);
     } catch {
-      /* fallback to local cache */
-    }
-    try {
-      const raw = localStorage.getItem("roomtrace_local_devices");
-      if (raw) {
-        const devs = JSON.parse(raw) as Array<{ id: string }>;
-        localStorage.setItem(
-          "roomtrace_local_devices",
-          JSON.stringify(devs.filter((d) => d.id !== id)),
-        );
-      }
-    } catch {
-      /* ignore */
+      toast.error("Could not remove the device. Check your connection and try again.");
+      return;
     }
     toast.success("Device removed");
     void qc.invalidateQueries({ queryKey: ["devices"] });
@@ -148,7 +138,8 @@ function DevicesPage() {
                       size="sm"
                       onClick={async () => {
                         try {
-                          const r = await rotate({ data: { id: d.id } });
+                          const token = (await authClient.getSession())?.token ?? "";
+                          const r = await rotate({ data: { id: d.id, id_token: token } });
                           setSecret({ device_id: d.device_id, secret: r.secret });
                         } catch (e) {
                           toast.error((e as Error).message);
@@ -313,8 +304,10 @@ function RegisterDialog({
     const fd = new FormData(e.currentTarget);
     setBusy(true);
     try {
+      const token = (await authClient.getSession())?.token ?? "";
       const r = await reg({
         data: {
+          id_token: token,
           device_name: String(fd.get("name")),
           device_id: String(fd.get("did")),
           room_id: room === "none" ? null : room,
@@ -360,7 +353,7 @@ function RegisterDialog({
                 name="did"
                 required
                 pattern="[A-Za-z0-9_\-]{3,64}"
-                placeholder="esp32-lab-01"
+                placeholder="e.g. living-room-radar"
                 className="font-mono"
               />
             </div>
@@ -469,17 +462,8 @@ function SensorDialog({ sensor, onClose }: { sensor: Sensor | null; onClose: () 
     try {
       await firebaseDb.updateSensor(sensor.id, { configuration: next });
     } catch {
-      /* fallback to local cache */
-    }
-    try {
-      const raw = localStorage.getItem("roomtrace_local_sensors");
-      if (raw) {
-        const sens = JSON.parse(raw) as Array<{ id: string; configuration?: unknown }>;
-        const updated = sens.map((s) => (s.id === sensor.id ? { ...s, configuration: next } : s));
-        localStorage.setItem("roomtrace_local_sensors", JSON.stringify(updated));
-      }
-    } catch {
-      /* ignore */
+      toast.error("Could not save the sensor configuration. Try again.");
+      return;
     }
     toast.success("Sensor configuration saved");
     void qc.invalidateQueries({ queryKey: ["sensors"] });

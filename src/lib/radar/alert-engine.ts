@@ -231,7 +231,7 @@ export function getInwardNormal(wall: "top" | "bottom" | "left" | "right"): {
 
 /**
  * Stateful, reusable alert detection engine for one room.
- * Analyzes live or simulated targets, suppresses duplicates, evaluates geometry,
+ * Analyzes live targets, suppresses duplicates, evaluates geometry,
  * and yields fully explainable events with evidence.
  */
 export class AlertEngine {

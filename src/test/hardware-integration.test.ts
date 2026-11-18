@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
+import { registerFixtureDevices } from "./device-fixtures";
 import {
   Route,
   getRoomAlertEngine,
@@ -23,6 +24,10 @@ import {
   type DetectedAlert,
 } from "@/lib/radar/alert-engine";
 import type { Door, LD2450Target, RoomZone } from "@/lib/radar/types";
+
+beforeEach(async () => {
+  await registerFixtureDevices();
+});
 
 describe("Phase 3.1: Hardware Telemetry Ingestion & Device Authentication", () => {
   beforeEach(() => {
@@ -84,7 +89,7 @@ describe("Phase 3.1: Hardware Telemetry Ingestion & Device Authentication", () =
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         data: {
@@ -112,7 +117,7 @@ describe("Phase 3.1: Hardware Telemetry Ingestion & Device Authentication", () =
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         timestamp: "2026-11-15T12:00:00.000Z",
@@ -145,7 +150,7 @@ describe("Phase 3.1: Hardware Telemetry Ingestion & Device Authentication", () =
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify(payload),
     });
@@ -161,7 +166,7 @@ describe("Phase 3.1: Hardware Telemetry Ingestion & Device Authentication", () =
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify(payload),
     });

@@ -170,7 +170,7 @@ export class RD61Tracker {
       emit(
         room,
         isConn ? "sensor_reconnected" : "sensor_disconnected",
-        isConn ? "Simulated RD-61 radar reconnected" : "Simulated RD-61 point cloud stopped",
+        isConn ? "RD-61 radar reconnected" : "RD-61 point cloud stopped",
         undefined,
         "rd61",
       );

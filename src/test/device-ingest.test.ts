@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
+import { registerFixtureDevices } from "./device-fixtures";
 import {
   parseLD2450Frame,
   serializeLD2450Frame,
@@ -18,7 +19,11 @@ import {
 } from "@/lib/device-auth.server";
 import { roomState, type RoomLive } from "@/lib/radar/live";
 
-describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () => {
+beforeEach(async () => {
+  await registerFixtureDevices();
+});
+
+describe("Device ingest: fault-injection and recovery tests", () => {
   beforeEach(() => {
     _resetTelemetryCache();
     _resetRateLimits();
@@ -135,7 +140,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         firmware_version: "1.0.0-phase5",
@@ -177,7 +182,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify(payload),
       });
@@ -202,7 +207,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({ firmware_version: "1.0.0-phase5", ip_address: "192.168.1.150" }),
     });
@@ -258,7 +263,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         data: {
@@ -287,7 +292,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           data: {
@@ -307,7 +312,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           data: {
@@ -332,7 +337,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           data: {
@@ -350,7 +355,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           data: {
@@ -377,7 +382,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         targets: [],
       },
     };
-    expect(roomState(freshLive, now, "hardware")).toBe("vacant");
+    expect(roomState(freshLive, now)).toBe("vacant");
 
     // Stale frame with 0 targets (> 5s old) -> sensor_offline, NEVER vacant!
     const staleLive: RoomLive = {
@@ -389,8 +394,8 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         targets: [],
       },
     };
-    expect(roomState(staleLive, now, "hardware")).toBe("sensor_offline");
-    expect(roomState(staleLive, now, "hardware")).not.toBe("vacant");
+    expect(roomState(staleLive, now)).toBe("sensor_offline");
+    expect(roomState(staleLive, now)).not.toBe("vacant");
   });
 
   it("Regression 4: Malformed or invalid frames are rejected and do not cause occupancy transitions", async () => {
@@ -399,7 +404,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         data: {
@@ -417,7 +422,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
     const reqValid = new Request("http://localhost/test", {
       headers: {
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
     });
     const authValid = await authenticateDevice(reqValid);
@@ -471,7 +476,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify(payload),
       });
@@ -522,7 +527,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         timestamp: historicalCapture,
@@ -551,7 +556,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         timestamp: "2026-11-15T10:00:00.000Z",
@@ -587,7 +592,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
           headers: {
             "content-type": "application/json",
             "x-device-id": "esp32-lab-01",
-            "x-device-key": "rt_demo_secret_key_12345",
+            "x-device-key": "rt_test_device_key",
           },
           body: JSON.stringify({
             timestamp: ct,
@@ -613,7 +618,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         data: {
@@ -637,7 +642,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
       headers: {
         "content-type": "application/json",
         "x-device-id": "esp32-lab-01",
-        "x-device-key": "rt_demo_secret_key_12345",
+        "x-device-key": "rt_test_device_key",
       },
       body: JSON.stringify({
         timestamp: "epoch_not_iso",
@@ -705,7 +710,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           firmware_version: "1.0.0-phase5",
@@ -730,7 +735,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           data: {
@@ -748,7 +753,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           data: {
@@ -767,7 +772,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
         headers: {
           "content-type": "application/json",
           "x-device-id": "esp32-lab-01",
-          "x-device-key": "rt_demo_secret_key_12345",
+          "x-device-key": "rt_test_device_key",
         },
         body: JSON.stringify({
           data: {
@@ -954,7 +959,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
           headers: {
             "content-type": "application/json",
             "x-device-id": "esp32-revoked-01",
-            "x-device-key": "rt_demo_secret_key_12345",
+            "x-device-key": "rt_test_device_key",
           },
           body: JSON.stringify({
             data: {
@@ -1002,7 +1007,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
 
       // 2. Provision new credentials at runtime (updateCredentials)
       deviceId = "esp32-lab-01";
-      deviceKey = "rt_demo_secret_key_12345";
+      deviceKey = "rt_test_device_key";
       authStatus = "OK";
       canTransmit = true;
 
@@ -1076,7 +1081,7 @@ describe("Phase 5.7: Desktop Hardware Simulation & Fault Injection Tests", () =>
           headers: {
             "content-type": "application/json",
             "x-device-id": "esp32-lab-01",
-            "x-device-key": "rt_demo_secret_key_12345",
+            "x-device-key": "rt_test_device_key",
           },
           body: JSON.stringify({
             timestamp: historicalTime,

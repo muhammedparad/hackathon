@@ -141,7 +141,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
 
     const frame1: RD61Frame = {
       sensor_type: "rd61",
-      origin: "simulated",
+      origin: "hardware",
       room_id: room.id,
       timestamp: 1000,
       points: createCluster(0, 2000, 12, 16.0),
@@ -186,7 +186,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
       tracker.processFrame(
         {
           sensor_type: "rd61",
-          origin: "simulated",
+          origin: "hardware",
           room_id: room.id,
           timestamp: 1000 + i * 150,
           points,
@@ -216,7 +216,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: createCluster(0, 1800, 10, 15.0, 0.8),
@@ -229,7 +229,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1150,
         points: createCluster(50, 1850, 10, 15.0, 0.8),
@@ -245,7 +245,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 32000,
         points: createCluster(100, 1900, 10, 15.0, 0.8),
@@ -270,7 +270,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 0,
         points: createCluster(0, 2000, 10),
@@ -283,7 +283,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 500,
         points: [],
@@ -296,7 +296,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1500,
         points: [],
@@ -309,7 +309,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 2400,
         points: [],
@@ -328,7 +328,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
   });
 
   it("records and filters events correctly by sensor_type in database layer", async () => {
-    // Record simulated LD2450 and RD-61 events
+    // Record LD2450 and RD-61 device events
     const ts = new Date().toISOString();
     await firebaseDb.recordEvent({
       room_id: room.id,
@@ -336,7 +336,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
       description: "LD2450 target 1 detected",
       target_id: 1,
       sensor_type: "ld2450",
-      simulated: true,
+      simulated: false,
       timestamp: ts,
     });
 
@@ -346,7 +346,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
       description: "RD-61 cluster #1 detected",
       target_id: 1,
       sensor_type: "rd61",
-      simulated: true,
+      simulated: false,
       timestamp: ts,
     });
 
@@ -380,7 +380,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: createCluster(0, 1000, 5),
@@ -393,7 +393,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1150,
         points: createCluster(100, 1050, 5),
@@ -406,7 +406,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1300,
         points: createCluster(200, 1100, 5),
@@ -439,7 +439,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: [...createCluster(0, 1000, 4), ...createCluster(600, 1000, 4)],
@@ -464,7 +464,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1150,
         points: [...createCluster(250, 1000, 4), ...createCluster(580, 1000, 4)],
@@ -499,7 +499,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points,
@@ -529,7 +529,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: createCluster(0, 1500, 5),
@@ -543,7 +543,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1100,
         points: createCluster(0, 1500, 5),
@@ -557,7 +557,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1200,
         points: createCluster(0, 1500, 5),
@@ -571,7 +571,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1300,
         points: [...createCluster(0, 1500, 5), ...createCluster(3000, 3000, 5)],
@@ -584,7 +584,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 2000,
         points: createCluster(0, 1500, 5),
@@ -609,7 +609,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 0,
         points: createCluster(0, 1500, 5),
@@ -622,7 +622,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 150,
         points: [],
@@ -635,7 +635,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 300,
         points: [],
@@ -651,7 +651,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 450,
         points: createCluster(10, 1510, 5),
@@ -680,7 +680,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 0,
         points: createCluster(0, 1500, 5),
@@ -694,7 +694,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 600,
         points: [],
@@ -709,7 +709,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: createCluster(0, 1500, 5),
@@ -722,7 +722,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1500,
         points: createCluster(0, 1500, 5),
@@ -751,7 +751,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: createCluster(0, 1500, 6),
@@ -770,7 +770,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 5000,
         points: createCluster(500, 1500, 6),
@@ -810,7 +810,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
       tracker.processFrame(
         {
           sensor_type: "rd61",
-          origin: "simulated",
+          origin: "hardware",
           room_id: room.id,
           timestamp: 1000 + i * 150,
           points: [...createCluster(step.t1x, 1500, 4), ...createCluster(step.t2x, 2500, 4)],
@@ -846,7 +846,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: [
@@ -866,7 +866,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1150,
         points: [
@@ -896,7 +896,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: createCluster(0, 1500, 5),
@@ -913,7 +913,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1150,
         points: [...createCluster(-600, 1500, 5), ...createCluster(300, 1500, 5)],
@@ -948,7 +948,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: [...createCluster(-300, 1500, 4), ...createCluster(300, 1500, 4)],
@@ -961,7 +961,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1150,
         points: [...createCluster(320, 1500, 4), ...createCluster(-280, 1500, 4)],
@@ -997,7 +997,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points: [...createCluster(0, 1500, 4), ...createCluster(1000, 2000, 4)],
@@ -1011,7 +1011,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1150,
         points: createCluster(1020, 2010, 4),
@@ -1025,7 +1025,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 2300,
         points: createCluster(1040, 2020, 4),
@@ -1059,7 +1059,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 1000,
         points,
@@ -1083,7 +1083,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 3000,
         points: pointsWithout3,
@@ -1105,7 +1105,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 3150,
         points: pointsWithNew,
@@ -1125,7 +1125,7 @@ describe("RD-61 Point-Cloud Tracker", () => {
     tracker.processFrame(
       {
         sensor_type: "rd61",
-        origin: "simulated",
+        origin: "hardware",
         room_id: room.id,
         timestamp: 10000,
         points: createCluster(0, 1500, 4),

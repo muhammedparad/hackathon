@@ -3,12 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { firebaseDb } from "@/lib/firebase/db";
-import { authClient, getAuthProviderType } from "@/lib/auth";
+import { authClient } from "@/lib/auth";
 import { devicesQuery, roomsQuery } from "@/lib/data";
 import { useLive } from "@/lib/radar/live";
 import { STALE_AFTER_MS, HEARTBEAT_TIMEOUT_MS } from "@/lib/radar/types";
 import { PageHeader, Panel, Pill } from "@/components/app/status";
-import { ModeToggle, SimControls } from "@/components/app/sim-controls";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,12 +30,12 @@ export const Route = createFileRoute("/_authenticated/settings")({
       { title: "Settings — RoomTrace" },
       {
         name: "description",
-        content: "Account, data source, simulation and notification settings.",
+        content: "Account, data source and notification settings.",
       },
       { property: "og:title", content: "Settings — RoomTrace" },
       {
         property: "og:description",
-        content: "Account, data source, simulation and notification settings.",
+        content: "Account, data source and notification settings.",
       },
     ],
   }),
@@ -53,14 +52,11 @@ function SettingsPage() {
   const [pw, setPw] = useState({ cur: "", next: "" });
   const [notif, setNotif] = useState({ occupancy: true, sensor: true, sound: false });
 
-  const [authProvider, setAuthProvider] = useState(getAuthProviderType());
-
   useEffect(() => {
     void authClient.getUser().then((user) => {
       setEmail(user?.email ?? "");
       setCreated(user?.created_at ?? "");
     });
-    setAuthProvider(getAuthProviderType());
     try {
       const n = localStorage.getItem("rt.notif");
       if (n) setNotif(JSON.parse(n));
@@ -95,33 +91,24 @@ function SettingsPage() {
         await firebaseDb.clearSimulatedEvents(r.id);
         await firebaseDb.clearSimulatedTrajectories(r.id);
       }
+      toast.success("Old simulated records deleted");
     } catch {
-      /* ignore */
+      toast.error("Could not delete some records. Check your connection and try again.");
     }
     void qc.invalidateQueries({ queryKey: ["events"] });
     void qc.invalidateQueries({ queryKey: ["analytics-events"] });
-    toast.success("Simulated history cleared");
   };
 
   return (
     <div className="space-y-6">
       <PageHeader title="Settings" />
       <Panel title="Data source">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="max-w-xl text-sm">
-            <p className="font-medium">
-              {live.mode === "simulation" ? "Simulation mode" : "Hardware mode"}
-            </p>
-            <p className="mt-1 text-muted-foreground">
-              {live.mode === "simulation"
-                ? "Synthetic LD2450 targets and RD-61 point clouds are generated in your browser. Everything is labelled SIMULATED."
-                : "Only telemetry received from authenticated ESP32-S3 devices is shown. Nothing is generated."}
-            </p>
-          </div>
-          <ModeToggle />
-        </div>
-        {live.mode === "hardware" && (
-          <div className="mt-4 rounded-lg border bg-muted/40 p-3 text-sm">
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            Only data received from authenticated, registered devices is shown. Nothing is generated
+            or simulated.
+          </p>
+          <div className="rounded-lg border bg-muted/40 p-3">
             Hardware status:{" "}
             {devices.some((d) => d.last_seen) ? (
               <Pill t="success">Telemetry received</Pill>
@@ -129,42 +116,35 @@ function SettingsPage() {
               <Pill t="warning">Unverified — no device has reported yet</Pill>
             )}
           </div>
-        )}
+        </div>
       </Panel>
 
-      <Panel title="Simulation">
-        <div className="space-y-4">
-          <SimControls roomId={live.selectedRoomId} />
-          <div className="flex items-center justify-between gap-4 text-sm">
-            <div>
-              <p className="font-medium">Record simulated events</p>
-              <p className="text-muted-foreground">
-                Store simulated occupancy events so Analytics and Event History have data. They're
-                flagged as simulated and can be filtered out.
-              </p>
-            </div>
-            <Switch
-              checked={live.persistSimEvents}
-              onCheckedChange={live.setPersistSimEvents}
-              aria-label="Record simulated events"
-            />
+      <Panel title="Old simulated records">
+        <div className="flex items-center justify-between gap-4 text-sm">
+          <div>
+            <p className="font-medium">Remove leftover simulated history</p>
+            <p className="text-muted-foreground">
+              Earlier versions could store simulated events and trajectories. They are already
+              hidden everywhere; this deletes them from the database. Real device records are kept.
+            </p>
           </div>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="outline" size="sm">
-                Clear simulated history
+                Delete old simulated records
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Clear simulated history?</AlertDialogTitle>
+                <AlertDialogTitle>Delete old simulated records?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  All events flagged as simulated will be deleted. Hardware events are kept.
+                  Every event and trajectory flagged as simulated will be permanently deleted.
+                  Records from real devices are not touched. This cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={clearSim}>Clear</AlertDialogAction>
+                <AlertDialogAction onClick={clearSim}>Delete</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
@@ -185,7 +165,7 @@ function SettingsPage() {
             <div className="flex justify-between">
               <dt className="text-muted-foreground">Auth Provider</dt>
               <dd className="font-mono text-xs uppercase px-1.5 py-0.5 rounded bg-muted font-semibold">
-                {authProvider}
+                firebase
               </dd>
             </div>
           </dl>

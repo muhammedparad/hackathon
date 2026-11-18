@@ -34,18 +34,6 @@ export function checkDeviceRateLimit(deviceId: string, maxRequests = 25, windowM
   return true;
 }
 
-/**
- * Demo/dev shortcuts (built-in demo devices, in-memory credential fallback) are OFF by default.
- * They turn on only under the test runner or when ROOMTRACE_ALLOW_DEMO_DEVICES=true is set explicitly.
- * Production (e.g. Render) must never set it: otherwise a public demo key could authenticate as a device.
- */
-export function demoDevicesEnabled(): boolean {
-  return Boolean(process.env["VITEST"]) || process.env["ROOMTRACE_ALLOW_DEMO_DEVICES"] === "true";
-}
-
-// In-memory store for registered device credentials (used only when Firestore Admin is not configured)
-export const registeredCredentials = new Map<string, { deviceId: string; secretHash: string }>();
-
 export interface AuthenticatedDevice {
   id: string;
   user_id: string;
@@ -56,7 +44,35 @@ export interface AuthenticatedDevice {
   last_seen: string | null;
 }
 
-/** Authenticates an ESP32 via X-Device-Id + X-Device-Key headers using Cloud Firestore / Admin SDK. */
+/* ---------- Test-only device registry ----------
+ * Consulted ONLY under the test runner (VITEST). In production it is never read, so no device can
+ * authenticate except one registered in Firestore. Tests fill it through _registerTestDevice.
+ */
+interface TestDevice {
+  device: AuthenticatedDevice;
+  secretHash: string;
+  revoked: boolean;
+}
+const testDevices = new Map<string, TestDevice>();
+const inTestRunner = () => Boolean(process.env["VITEST"]);
+
+export async function _registerTestDevice(
+  device: AuthenticatedDevice,
+  secret: string,
+  opts: { revoked?: boolean } = {},
+): Promise<void> {
+  testDevices.set(device.device_id, {
+    device,
+    secretHash: await sha256Hex(secret),
+    revoked: opts.revoked ?? false,
+  });
+}
+
+export function _clearTestDevices(): void {
+  testDevices.clear();
+}
+
+/** Authenticates an ESP32 via X-Device-Id + X-Device-Key headers against Firestore (Admin SDK). */
 export async function authenticateDevice(request: Request) {
   const deviceId = request.headers.get("x-device-id");
   const key = request.headers.get("x-device-key");
@@ -72,81 +88,55 @@ export async function authenticateDevice(request: Request) {
   }
 
   const keyHash = await sha256Hex(key);
-  const db = getAdminFirestore();
 
-  if (db) {
-    try {
-      const devSnap = await db
-        .collection("devices")
-        .where("device_id", "==", deviceId)
-        .limit(1)
-        .get();
-
-      if (!devSnap.empty) {
-        const docSnap = devSnap.docs[0];
-        if (docSnap) {
-          const dev = { id: docSnap.id, ...docSnap.data() } as AuthenticatedDevice;
-
-          // Check credentials collection
-          const credSnap = await db
-            .collection("device_credentials")
-            .where("device_id", "==", dev.id)
-            .limit(1)
-            .get();
-
-          if (!credSnap.empty) {
-            const credData = credSnap.docs[0]?.data();
-            const secretHash = credData
-              ? (credData["secret_hash"] as string | undefined)
-              : undefined;
-            if (secretHash && timingSafeEqual(secretHash, keyHash)) {
-              return { device: dev } as const;
-            }
-          }
-        }
+  if (inTestRunner()) {
+    const t = testDevices.get(deviceId);
+    if (t) {
+      if (!timingSafeEqual(t.secretHash, keyHash)) {
+        return { error: json({ error: "Invalid device credentials" }, 401) } as const;
       }
-    } catch (err) {
-      console.warn("[Device Auth] Firestore lookup failed:", err);
+      if (t.revoked) {
+        return { error: json({ error: "Device access revoked or disabled" }, 403) } as const;
+      }
+      return { device: { ...t.device, last_seen: new Date().toISOString() } } as const;
     }
   }
 
-  // In-memory credential cache: only when Firestore Admin is not configured (local dev) or demo mode is on.
-  // With Firestore configured, a lookup failure must NOT fall back to a memory cache.
-  const cached = !db || demoDevicesEnabled() ? registeredCredentials.get(deviceId) : undefined;
-  if (cached && timingSafeEqual(cached.secretHash, keyHash)) {
-    const dev: AuthenticatedDevice = {
-      id: cached.deviceId,
-      user_id: "usr_admin_default",
-      device_id: deviceId,
-      device_name: deviceId,
-      room_id: null,
-      status: "connected",
-      last_seen: new Date().toISOString(),
-    };
-    return { device: dev } as const;
+  const db = getAdminFirestore();
+  if (!db) {
+    // Production without Firebase Admin credentials cannot verify any device: say so clearly.
+    return inTestRunner()
+      ? ({ error: json({ error: "Invalid device credentials" }, 401) } as const)
+      : ({
+          error: json(
+            { error: "Server is not configured: FIREBASE_SERVICE_ACCOUNT_KEY is missing" },
+            503,
+          ),
+        } as const);
   }
 
-  // Allow standard demo lab device for testing (demo mode only)
-  if (demoDevicesEnabled() && deviceId === "esp32-lab-01" && key === "rt_demo_secret_key_12345") {
-    const dev: AuthenticatedDevice = {
-      id: "d1a1b1c1-1111-2222-3333-444455556666",
-      user_id: "usr_admin_default",
-      device_id: "esp32-lab-01",
-      device_name: "Lab Radar Hub",
-      room_id: "e4a7a8d0-4491-4e78-9584-c817215c0e01",
-      status: "connected",
-      last_seen: new Date().toISOString(),
-    };
-    return { device: dev } as const;
-  }
-
-  // Revoked demo device for 403 Forbidden testing (demo mode only)
-  if (
-    demoDevicesEnabled() &&
-    deviceId === "esp32-revoked-01" &&
-    key === "rt_demo_secret_key_12345"
-  ) {
-    return { error: json({ error: "Device access revoked or disabled" }, 403) } as const;
+  try {
+    const devSnap = await db
+      .collection("devices")
+      .where("device_id", "==", deviceId)
+      .limit(1)
+      .get();
+    const docSnap = devSnap.docs[0];
+    if (docSnap) {
+      const dev = { id: docSnap.id, ...docSnap.data() } as AuthenticatedDevice;
+      const credSnap = await db
+        .collection("device_credentials")
+        .where("device_id", "==", dev.id)
+        .limit(1)
+        .get();
+      const secretHash = credSnap.docs[0]?.data()?.["secret_hash"] as string | undefined;
+      if (secretHash && timingSafeEqual(secretHash, keyHash)) {
+        return { device: dev } as const;
+      }
+    }
+  } catch (err) {
+    console.warn("[Device Auth] Firestore lookup failed:", err);
+    return { error: json({ error: "Device lookup failed" }, 503) } as const;
   }
 
   return { error: json({ error: "Invalid device credentials" }, 401) } as const;

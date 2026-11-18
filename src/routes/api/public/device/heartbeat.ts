@@ -3,6 +3,7 @@ import { heartbeatBodySchema } from "@/lib/radar/types";
 import { authenticateDevice, json } from "@/lib/device-auth.server";
 import { getAdminFirestore } from "@/lib/firebase/admin.server";
 import { publishDeviceSeen } from "@/lib/live/publish.server";
+import { syncSensorStatus } from "@/lib/sensor-status.server";
 
 // POST /api/public/device/heartbeat — called by the ESP32-S3 every ~15 s.
 export const Route = createFileRoute("/api/public/device/heartbeat")({
@@ -44,6 +45,15 @@ export const Route = createFileRoute("/api/public/device/heartbeat")({
                 },
                 { merge: true },
               );
+
+            // Sensor status exactly as the device reports it (never assumed).
+            const reported =
+              body.data.ld2450_connected === false || body.data.sensor_status === "disconnected"
+                ? "disconnected"
+                : body.data.ld2450_connected === true || body.data.sensor_status === "online"
+                  ? "connected"
+                  : null;
+            if (reported) await syncSensorStatus(db, device, "ld2450", reported);
 
             if (wasOffline && device.last_seen) {
               await db.collection("occupancy_events").add({

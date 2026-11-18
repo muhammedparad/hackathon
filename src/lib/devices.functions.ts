@@ -1,14 +1,30 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { getAdminFirestore } from "@/lib/firebase/admin.server";
-import { sha256Hex, registeredCredentials } from "@/lib/device-auth.server";
+import { getAdminFirestore, verifyUserToken } from "@/lib/firebase/admin.server";
+import { sha256Hex } from "@/lib/device-auth.server";
 
 function randomSecret(): string {
   const b = crypto.getRandomValues(new Uint8Array(24));
   return "rt_" + [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
+/** Every call proves who the caller is with their Firebase ID token; the device is owned by that uid. */
+async function requireUid(idToken: string): Promise<string> {
+  const user = await verifyUserToken(idToken);
+  if (!user) throw new Error("You must be signed in to manage devices.");
+  return user.uid;
+}
+
+function requireDb() {
+  const db = getAdminFirestore();
+  if (!db) {
+    throw new Error("Server is not configured: FIREBASE_SERVICE_ACCOUNT_KEY is missing.");
+  }
+  return db;
+}
+
 const createSchema = z.object({
+  id_token: z.string().min(10).max(4096),
   device_name: z.string().trim().min(1).max(80),
   device_id: z
     .string()
@@ -24,134 +40,112 @@ const createSchema = z.object({
   }),
 });
 
-/** Registers an ESP32-S3 and its sensors into Cloud Firestore, returning a one-time device secret. */
+/** Registers an ESP32-S3 and its sensors for the signed-in user, returning a one-time device secret. */
 export const registerDevice = createServerFn({ method: "POST" })
   .validator((input: z.input<typeof createSchema>) => createSchema.parse(input))
   .handler(async ({ data }) => {
-    const db = getAdminFirestore();
+    const uid = await requireUid(data.id_token);
+    const db = requireDb();
     const secret = randomSecret();
     const secretHash = await sha256Hex(secret);
-    const deviceDocId = `dev_${Math.random().toString(36).slice(2, 10)}`;
     const nowIso = new Date().toISOString();
 
-    if (db) {
-      try {
-        // Check if device_id is already registered
-        const existing = await db
-          .collection("devices")
-          .where("device_id", "==", data.device_id)
-          .limit(1)
-          .get();
-        if (!existing.empty) {
-          throw new Error("That device ID is already registered.");
-        }
-
-        const devRef = await db.collection("devices").add({
-          device_name: data.device_name,
-          device_id: data.device_id,
-          device_type: "esp32",
-          room_id: data.room_id ?? null,
-          user_id: "usr_admin_default",
-          status: "unknown",
-          last_seen: null,
-          created_at: nowIso,
-          updated_at: nowIso,
-        });
-
-        const devId = devRef.id;
-
-        // Register sensors
-        const sensors = [];
-        if (data.ld2450.enabled) {
-          sensors.push({
-            device_id: devId,
-            user_id: "usr_admin_default",
-            sensor_type: "ld2450",
-            model: "HLK-LD2450",
-            configuration: { band: "24 GHz", uart: data.ld2450.uart, baud_rate: data.ld2450.baud },
-            status: "connected",
-            created_at: nowIso,
-          });
-        }
-        if (data.rd61.enabled) {
-          sensors.push({
-            device_id: devId,
-            user_id: "usr_admin_default",
-            sensor_type: "rd61",
-            model: "Ai-Thinker RD-61",
-            configuration: {
-              band: "60 GHz",
-              interface: data.rd61.kit,
-              firmware_version: data.rd61.firmware,
-              data_mode: data.rd61.data_mode,
-            },
-            status: "connected",
-            created_at: nowIso,
-          });
-        }
-
-        for (const s of sensors) {
-          await db.collection("sensors").add(s);
-        }
-
-        // Store credential hash
-        await db.collection("device_credentials").add({
-          device_id: devId,
-          secret_hash: secretHash,
-          created_at: nowIso,
-        });
-
-        // Cache in memory for immediate authentication
-        registeredCredentials.set(data.device_id, { deviceId: devId, secretHash });
-
-        return { id: devId, device_id: data.device_id, secret };
-      } catch (err) {
-        if (err instanceof Error && err.message.includes("already registered")) {
-          throw err;
-        }
-        console.warn("[Devices] Cloud registration fallback to memory cache:", err);
+    // The room, if any, must belong to the caller.
+    if (data.room_id) {
+      const room = await db.collection("rooms").doc(data.room_id).get();
+      if (!room.exists || room.data()?.["user_id"] !== uid) {
+        throw new Error("That room does not exist or is not yours.");
       }
     }
 
-    // In-memory fallback
-    registeredCredentials.set(data.device_id, { deviceId: deviceDocId, secretHash });
-    return { id: deviceDocId, device_id: data.device_id, secret };
+    const existing = await db
+      .collection("devices")
+      .where("device_id", "==", data.device_id)
+      .limit(1)
+      .get();
+    if (!existing.empty) throw new Error("That device ID is already registered.");
+
+    const devRef = await db.collection("devices").add({
+      device_name: data.device_name,
+      device_id: data.device_id,
+      device_type: "esp32",
+      room_id: data.room_id ?? null,
+      user_id: uid,
+      status: "unknown",
+      last_seen: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    const devId = devRef.id;
+
+    // Sensors start as "unknown": a sensor is only reported connected once the device says so.
+    if (data.ld2450.enabled) {
+      await db.collection("sensors").add({
+        device_id: devId,
+        user_id: uid,
+        sensor_type: "ld2450",
+        model: "HLK-LD2450",
+        configuration: { band: "24 GHz", uart: data.ld2450.uart, baud_rate: data.ld2450.baud },
+        status: "unknown",
+        created_at: nowIso,
+      });
+    }
+    if (data.rd61.enabled) {
+      await db.collection("sensors").add({
+        device_id: devId,
+        user_id: uid,
+        sensor_type: "rd61",
+        model: "Ai-Thinker RD-61",
+        configuration: {
+          band: "60 GHz",
+          interface: data.rd61.kit,
+          firmware_version: data.rd61.firmware,
+          data_mode: data.rd61.data_mode,
+        },
+        status: "unknown",
+        created_at: nowIso,
+      });
+    }
+
+    await db.collection("device_credentials").add({
+      device_id: devId,
+      secret_hash: secretHash,
+      created_at: nowIso,
+    });
+
+    return { id: devId, device_id: data.device_id, secret };
   });
 
-/** Rotates a device secret in Cloud Firestore. The old secret stops working immediately. */
-export const rotateDeviceSecret = createServerFn({ method: "POST" })
-  .validator((input: { id: string }) => z.object({ id: z.string() }).parse(input))
-  .handler(async ({ data }) => {
-    const db = getAdminFirestore();
-    const secret = randomSecret();
-    const secretHash = await sha256Hex(secret);
+const rotateSchema = z.object({ id_token: z.string().min(10).max(4096), id: z.string().min(1) });
 
-    if (db) {
-      try {
-        const credSnap = await db
-          .collection("device_credentials")
-          .where("device_id", "==", data.id)
-          .limit(1)
-          .get();
-        if (!credSnap.empty) {
-          const docId = credSnap.docs[0]?.id;
-          if (docId) {
-            await db.collection("device_credentials").doc(docId).update({
-              secret_hash: secretHash,
-              updated_at: new Date().toISOString(),
-            });
-          }
-        } else {
-          await db.collection("device_credentials").add({
-            device_id: data.id,
-            secret_hash: secretHash,
-            created_at: new Date().toISOString(),
-          });
-        }
-      } catch {
-        /* ignore */
-      }
+/** Rotates a device secret. Only the device's owner can do this; the old secret stops working at once. */
+export const rotateDeviceSecret = createServerFn({ method: "POST" })
+  .validator((input: z.input<typeof rotateSchema>) => rotateSchema.parse(input))
+  .handler(async ({ data }) => {
+    const uid = await requireUid(data.id_token);
+    const db = requireDb();
+
+    const dev = await db.collection("devices").doc(data.id).get();
+    if (!dev.exists || dev.data()?.["user_id"] !== uid) {
+      throw new Error("That device does not exist or is not yours.");
     }
 
+    const secret = randomSecret();
+    const secretHash = await sha256Hex(secret);
+    const nowIso = new Date().toISOString();
+
+    const credSnap = await db
+      .collection("device_credentials")
+      .where("device_id", "==", data.id)
+      .limit(1)
+      .get();
+    const credDoc = credSnap.docs[0];
+    if (credDoc) {
+      await credDoc.ref.update({ secret_hash: secretHash, updated_at: nowIso });
+    } else {
+      await db
+        .collection("device_credentials")
+        .add({ device_id: data.id, secret_hash: secretHash, created_at: nowIso });
+    }
     return { secret };
   });

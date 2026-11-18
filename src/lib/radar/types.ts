@@ -1,8 +1,7 @@
 import { z } from "zod";
 
 /** Where a frame came from. Every visual must show this. */
-export type DataOrigin = "simulated" | "hardware";
-export type DataMode = "simulation" | "hardware";
+export type DataOrigin = "hardware";
 
 /** HLK-LD2450 (24 GHz): up to 3 tracked targets with coordinates + speed. */
 export interface LD2450Target {
@@ -158,15 +157,7 @@ export interface RoomZone {
 }
 
 export type ObjectType =
-  | "bed"
-  | "couch"
-  | "sofa"
-  | "table"
-  | "desk"
-  | "stove"
-  | "door"
-  | "window"
-  | "stairs";
+  "bed" | "couch" | "sofa" | "table" | "desk" | "stove" | "door" | "window" | "stairs";
 
 export interface RoomObject {
   id: string;

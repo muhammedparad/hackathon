@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import type { ConnectionState, RoomState } from "@/lib/radar/types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FlaskConical, Info } from "lucide-react";
+import { Info } from "lucide-react";
 import type { ReactNode } from "react";
 
 const tone = {
@@ -81,19 +81,6 @@ export function RoomBadge({ s }: { s: RoomState }) {
     <Pill t={t} pulse={s === "occupied"}>
       {l}
     </Pill>
-  );
-}
-
-export function SimTag({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-md bg-sim-soft px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wider text-sim",
-        className,
-      )}
-    >
-      <FlaskConical className="size-3" aria-hidden /> SIMULATED
-    </span>
   );
 }
 
@@ -269,7 +256,6 @@ export function Kpi({
   label,
   value,
   sub,
-  sim,
   tone = "neutral",
   status,
   hint,
@@ -280,7 +266,6 @@ export function Kpi({
   label: string;
   value: string | number;
   sub?: string | undefined;
-  sim?: boolean | undefined;
   tone?: keyof typeof KPI_TONE | undefined;
   status?: string | undefined;
   hint?: string | undefined;
@@ -309,11 +294,7 @@ export function Kpi({
         ) : (
           <span />
         )}
-        {sim ? (
-          <SimTag />
-        ) : status ? (
-          <Pill t={tone === "neutral" ? "neutral" : tone}>{status}</Pill>
-        ) : null}
+        {status ? <Pill t={tone === "neutral" ? "neutral" : tone}>{status}</Pill> : null}
       </div>
       <div className="mt-4 font-mono text-3xl font-semibold tracking-tight tabular">{value}</div>
       <div className="mt-0.5 text-sm font-medium">{label}</div>

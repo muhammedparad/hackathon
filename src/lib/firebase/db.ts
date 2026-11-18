@@ -19,8 +19,7 @@ import {
   type Query,
   type DocumentData,
 } from "firebase/firestore";
-import { ref as rtdbRef, onValue as rtdbOnValue, get as rtdbGet } from "firebase/database";
-import { getFirebaseApp, getFirebaseRtdb, isFirebaseConfigured } from "./config";
+import { getFirebaseApp, isFirebaseConfigured } from "./config";
 import type {
   AlertSeverity,
   Door,
@@ -355,45 +354,6 @@ export function getFirestoreDb(): Firestore | null {
   }
 }
 
-export const DEFAULT_RTDB_USER_ID = "tLFl6MTucSNEdVlajznusTNMXv43";
-
-export function getEffectiveUserId(userId?: string): string {
-  if (!userId || userId.startsWith("usr_")) {
-    return DEFAULT_RTDB_USER_ID;
-  }
-  return userId;
-}
-
-export interface RtdbTargetData {
-  present?: boolean;
-  count?: number | string;
-  x_mm?: number | string;
-  y_mm?: number | string;
-  speed_cm_s?: number | string;
-  target_id?: number;
-  id?: number;
-  speed_cms?: number | string;
-  distance_m?: number | string;
-}
-
-export interface RtdbDevicePayload {
-  room_id?: string | null;
-  latest?: {
-    ms?: number;
-    rd60?: {
-      target?: RtdbTargetData;
-      situation?: string;
-    };
-    rd61?: {
-      target?: RtdbTargetData;
-      situation?: string;
-    };
-    target?: RtdbTargetData;
-    targets?: RtdbTargetData[];
-    situation?: string;
-  };
-}
-
 export const firebaseDb = {
   isReady(): boolean {
     return isFirebaseConfigured() && getFirestoreDb() !== null;
@@ -608,85 +568,12 @@ export const firebaseDb = {
   /* ---------------- Devices ---------------- */
   async getDevices(userId?: string): Promise<Device[]> {
     const db = getFirestoreDb();
-    const rtdb = getFirebaseRtdb();
-    const effectiveUserId = getEffectiveUserId(userId);
-
-    let firestoreDevs: Device[] = [];
-    if (db) {
-      try {
-        const col = collection(db, "devices");
-        const q = userId ? query(col, where("user_id", "==", userId)) : col;
-        const snapshot = await withTimeout(getDocs(q), 2500);
-        firestoreDevs = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<Device, "id">),
-        }));
-      } catch (err) {
-        logFirestoreWarning("Fetching devices fallback", err);
-      }
-    }
-
-    let rtdbDevs: Device[] = [];
-    if (rtdb && effectiveUserId) {
-      const uidsToQuery = Array.from(new Set([effectiveUserId, DEFAULT_RTDB_USER_ID]));
-      for (const uid of uidsToQuery) {
-        try {
-          const devRef = rtdbRef(rtdb, `users/${uid}/devices`);
-          const snap = await withTimeout(rtdbGet(devRef), 2500);
-          if (snap.exists()) {
-            const val = snap.val() as Record<string, RtdbDevicePayload>;
-            const nowIso = new Date().toISOString();
-            for (const [devKey, devVal] of Object.entries(val)) {
-              const latest = devVal?.latest;
-              const isOnline = Boolean(latest);
-              rtdbDevs.push({
-                id: devKey,
-                user_id: uid,
-                device_id: devKey,
-                device_name: `Radar Hub (${devKey})`,
-                device_type: "esp32",
-                room_id: devVal?.room_id ?? "b2c3d4e5-6677-8899-0011-223344556677",
-                status: isOnline ? "connected" : "disconnected",
-                last_seen: isOnline ? nowIso : null,
-                created_at: nowIso,
-                updated_at: nowIso,
-              });
-            }
-          }
-        } catch (err) {
-          const msg = String(err);
-          if (
-            msg.includes("Permission denied") ||
-            (err as { code?: string })?.code === "PERMISSION_DENIED"
-          ) {
-            if (typeof window !== "undefined") {
-              window.dispatchEvent(
-                new CustomEvent("roomtrace_rtdb_permission_denied", { detail: { uid } }),
-              );
-            }
-          }
-        }
-      }
-    }
-
-    const mergedMap = new Map<string, Device>();
-    for (const d of firestoreDevs) {
-      mergedMap.set(d.device_id, d);
-    }
-    for (const rd of rtdbDevs) {
-      const existing = mergedMap.get(rd.device_id);
-      if (existing) {
-        mergedMap.set(rd.device_id, {
-          ...existing,
-          status: rd.status,
-          last_seen: rd.last_seen || existing.last_seen,
-        });
-      } else {
-        mergedMap.set(rd.device_id, rd);
-      }
-    }
-
-    return [...mergedMap.values()];
+    if (!db || !userId) return [];
+    const snapshot = await withTimeout(
+      getDocs(query(collection(db, "devices"), where("user_id", "==", userId))),
+      2500,
+    );
+    return snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Device, "id">) }));
   },
 
   async createDevice(device: Omit<Device, "id">): Promise<string> {
@@ -724,192 +611,17 @@ export const firebaseDb = {
 
   subscribeToDevices(callback: (devices: Device[]) => void, userId?: string): Unsubscribe {
     const db = getFirestoreDb();
-    const rtdb = getFirebaseRtdb();
-    const effectiveUserId = getEffectiveUserId(userId);
-
-    let firestoreDevs: Device[] = [];
-    let rtdbDevs: Device[] = [];
-
-    const emitMerged = () => {
-      const mergedMap = new Map<string, Device>();
-      for (const d of firestoreDevs) {
-        mergedMap.set(d.device_id, d);
-      }
-      for (const rd of rtdbDevs) {
-        const existing = mergedMap.get(rd.device_id);
-        if (existing) {
-          mergedMap.set(rd.device_id, {
-            ...existing,
-            status: rd.status,
-            last_seen: rd.last_seen || existing.last_seen,
-          });
-        } else {
-          mergedMap.set(rd.device_id, rd);
-        }
-      }
-      callback([...mergedMap.values()]);
-    };
-
-    let unsubFirestore: Unsubscribe = () => {};
-    if (db) {
-      try {
-        const col = collection(db, "devices");
-        const q = userId ? query(col, where("user_id", "==", userId)) : col;
-        unsubFirestore = onSnapshot(
-          q,
-          (snap) => {
-            firestoreDevs = snap.docs.map((d) => ({
-              id: d.id,
-              ...(d.data() as Omit<Device, "id">),
-            }));
-            emitMerged();
-          },
-          () => {
-            /* ignore error */
-          },
-        );
-      } catch {
-        /* ignore */
-      }
+    if (!db || !userId) return () => {};
+    try {
+      return onSnapshot(
+        query(collection(db, "devices"), where("user_id", "==", userId)),
+        (snap) =>
+          callback(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Device, "id">) }))),
+        (err) => logFirestoreWarning("Devices subscription", err),
+      );
+    } catch {
+      return () => {};
     }
-
-    const unsubsRtdb: Unsubscribe[] = [];
-    if (rtdb) {
-      const uids = Array.from(new Set([effectiveUserId, DEFAULT_RTDB_USER_ID]));
-      for (const uid of uids) {
-        try {
-          const devRef = rtdbRef(rtdb, `users/${uid}/devices`);
-          const unsub = rtdbOnValue(
-            devRef,
-            (snap) => {
-              if (snap.exists()) {
-                const val = snap.val() as Record<string, RtdbDevicePayload>;
-                const nowIso = new Date().toISOString();
-                rtdbDevs = Object.entries(val).map(([devKey, devVal]) => {
-                  const latest = devVal?.latest;
-                  const isOnline = Boolean(latest);
-                  return {
-                    id: devKey,
-                    user_id: uid,
-                    device_id: devKey,
-                    device_name: `Radar Hub (${devKey})`,
-                    device_type: "esp32",
-                    room_id: devVal?.room_id ?? "b2c3d4e5-6677-8899-0011-223344556677",
-                    status: isOnline ? "connected" : "disconnected",
-                    last_seen: isOnline ? nowIso : null,
-                    created_at: nowIso,
-                    updated_at: nowIso,
-                  };
-                });
-                emitMerged();
-              }
-            },
-            (err) => {
-              console.warn("[RTDB Devices] Read error:", err);
-              const msg = String(err);
-              if (
-                msg.includes("Permission denied") ||
-                (err as { code?: string })?.code === "PERMISSION_DENIED"
-              ) {
-                if (typeof window !== "undefined") {
-                  window.dispatchEvent(
-                    new CustomEvent("roomtrace_rtdb_permission_denied", { detail: { uid } }),
-                  );
-                }
-              }
-            },
-          );
-          unsubsRtdb.push(unsub);
-        } catch (err) {
-          console.warn("[RTDB Devices] Setup error:", err);
-        }
-      }
-    }
-
-    return () => {
-      unsubFirestore();
-      unsubsRtdb.forEach((u) => u());
-    };
-  },
-
-  subscribeToRtdbLiveTelemetry(
-    userId: string | undefined,
-    callback: (telemetry: { deviceId: string; timestamp: number; targets: LD2450Target[] }) => void,
-  ): Unsubscribe {
-    const rtdb = getFirebaseRtdb();
-    const effectiveUserId = getEffectiveUserId(userId);
-    if (!rtdb) return () => {};
-
-    const uidsToListen = Array.from(new Set([effectiveUserId, DEFAULT_RTDB_USER_ID]));
-    const unsubs: Unsubscribe[] = [];
-
-    for (const uid of uidsToListen) {
-      try {
-        const devRef = rtdbRef(rtdb, `users/${uid}/devices`);
-        const unsub = rtdbOnValue(
-          devRef,
-          (snap) => {
-            if (!snap.exists()) return;
-            const val = snap.val() as Record<string, RtdbDevicePayload>;
-            for (const [devKey, devVal] of Object.entries(val)) {
-              const latest = devVal?.latest;
-              if (!latest) continue;
-
-              const rd60 = latest.rd60 || latest.rd61;
-              const target = rd60?.target || latest.target;
-              const targets: LD2450Target[] = [];
-
-              if (target && (target.present || Number(target.count) > 0 || target.x_mm !== undefined)) {
-                targets.push({
-                  target_id: 1,
-                  x_mm: Number(target.x_mm) || 0,
-                  y_mm: Number(target.y_mm) || 0,
-                  speed_cms: Number(target.speed_cm_s ?? target.speed_cms) || 0,
-                });
-              } else if (Array.isArray(latest.targets)) {
-                for (let i = 0; i < latest.targets.length; i++) {
-                  const t = latest.targets[i];
-                  if (!t) continue;
-                  targets.push({
-                    target_id: t.target_id ?? t.id ?? i + 1,
-                    x_mm: Number(t.x_mm) || 0,
-                    y_mm: Number(t.y_mm) || 0,
-                    speed_cms: Number(t.speed_cms ?? t.speed_cm_s) || 0,
-                  });
-                }
-              }
-
-              callback({
-                deviceId: devKey,
-                timestamp: Date.now(),
-                targets,
-              });
-            }
-          },
-          (err) => {
-            console.warn("[RTDB Telemetry] Read error:", err);
-            const msg = String(err);
-            if (
-              msg.includes("Permission denied") ||
-              (err as { code?: string })?.code === "PERMISSION_DENIED"
-            ) {
-              if (typeof window !== "undefined") {
-                window.dispatchEvent(
-                  new CustomEvent("roomtrace_rtdb_permission_denied", { detail: { uid } }),
-                );
-              }
-            }
-          },
-        );
-        unsubs.push(unsub);
-      } catch (err) {
-        console.warn("[RTDB Telemetry] Setup error:", err);
-      }
-    }
-
-    return () => {
-      unsubs.forEach((u) => u());
-    };
   },
 
   /* ---------------- Sensors ---------------- */
@@ -931,34 +643,7 @@ export const firebaseDb = {
         /* fallback */
       }
     }
-    if (firestoreSensors.length > 0) return firestoreSensors;
-
-    // Default hardware sensors for roomtrace_01
-    if (!deviceId || deviceId === "roomtrace_01") {
-      return [
-        {
-          id: "sensor-ld2450-roomtrace-01",
-          device_id: "roomtrace_01",
-          user_id: userId || DEFAULT_RTDB_USER_ID,
-          sensor_type: "ld2450",
-          model: "HLK-LD2450",
-          status: "active",
-          configuration: { baud_rate: 256000, target_mode: "multi-target" },
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: "sensor-rd61-roomtrace-01",
-          device_id: "roomtrace_01",
-          user_id: userId || DEFAULT_RTDB_USER_ID,
-          sensor_type: "rd61",
-          model: "Ai-Thinker RD-61",
-          status: "active",
-          configuration: { baud_rate: 115200, firmware_build: "#2967 Standard Point Cloud V1.0.0" },
-          created_at: new Date().toISOString(),
-        },
-      ];
-    }
-    return [];
+    return firestoreSensors;
   },
 
   async updateSensor(sensorId: string, updates: Partial<Sensor>): Promise<void> {
@@ -977,7 +662,6 @@ export const firebaseDb = {
     sensorType?: string | undefined;
     severity?: AlertSeverity | undefined;
     acknowledged?: boolean | undefined;
-    includeSimulated?: boolean | undefined;
     limitCount?: number | undefined;
   }): Promise<{ rows: OccupancyEvent[]; count: number }> {
     const filterLocal = (events: OccupancyEvent[]) => {
@@ -988,7 +672,7 @@ export const firebaseDb = {
       if (filters?.severity) res = res.filter((r) => r.severity === filters.severity);
       if (filters?.acknowledged !== undefined)
         res = res.filter((r) => (r.acknowledged ?? false) === filters.acknowledged);
-      if (filters?.includeSimulated === false) res = res.filter((r) => !r.simulated);
+      res = res.filter((r) => !r.simulated); // records from old simulation runs are never shown
       if (filters?.fromIso) res = res.filter((r) => r.timestamp >= filters.fromIso!);
       if (filters?.toIso) res = res.filter((r) => r.timestamp <= filters.toIso!);
       return { rows: res.slice(0, filters?.limitCount ?? 50), count: res.length };
@@ -1038,9 +722,7 @@ export const firebaseDb = {
       if (filters?.acknowledged !== undefined) {
         rows = rows.filter((r) => (r.acknowledged ?? false) === filters.acknowledged);
       }
-      if (filters?.includeSimulated === false) {
-        rows = rows.filter((r) => !r.simulated);
-      }
+      rows = rows.filter((r) => !r.simulated); // records from old simulation runs are never shown
       if (filters?.fromIso) {
         rows = rows.filter((r) => r.timestamp >= filters.fromIso!);
       }
@@ -1076,7 +758,6 @@ export const firebaseDb = {
   async acknowledgeEvent(options: {
     eventId: string;
     roomId: string;
-    simulated: boolean;
     userId: string;
   }): Promise<void> {
     const ackTime = new Date().toISOString();
@@ -1098,16 +779,13 @@ export const firebaseDb = {
 
     const db = getFirestoreDb();
     if (!db) return;
-    try {
-      const ref = doc(db, "occupancy_events", options.eventId);
-      await updateDoc(ref, {
-        acknowledged: true,
-        acknowledged_at: serverTimestamp(),
-        acknowledged_by: options.userId,
-      });
-    } catch {
-      /* ignore */
-    }
+    // Errors propagate so the page can tell the user the acknowledgement did not save.
+    const ref = doc(db, "occupancy_events", options.eventId);
+    await updateDoc(ref, {
+      acknowledged: true,
+      acknowledged_at: serverTimestamp(),
+      acknowledged_by: options.userId,
+    });
   },
 
   async clearSimulatedEvents(roomId: string): Promise<void> {
@@ -1259,7 +937,6 @@ export const firebaseDb = {
     roomId: string;
     fromIso?: string | undefined;
     toIso?: string | undefined;
-    simulated?: boolean | undefined;
     sensorType?: "ld2450" | "rd61" | undefined;
     targetId?: number | undefined;
     limitCount?: number | undefined;
@@ -1267,7 +944,7 @@ export const firebaseDb = {
     const fallback = () =>
       getLocalTrajectoriesFromStorage({
         roomId: options.roomId,
-        simulated: options.simulated,
+        simulated: false,
         sensorType: options.sensorType,
         targetId: options.targetId,
         fromIso: options.fromIso,
@@ -1278,26 +955,19 @@ export const firebaseDb = {
     if (!db) return fallback();
     try {
       const col = collection(db, "trajectory_segments");
-      let q = query(
+      const q = query(
         col,
         where("room_id", "==", options.roomId),
         orderBy("start_epoch", "asc"),
         limit(options.limitCount ?? 300),
       );
-      if (options.simulated !== undefined) {
-        q = query(
-          col,
-          where("room_id", "==", options.roomId),
-          where("simulated", "==", options.simulated),
-          orderBy("start_epoch", "asc"),
-          limit(options.limitCount ?? 300),
-        );
-      }
       const snapshot = await withTimeout(getDocs(q));
-      let list = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<TrajectorySegment, "id">),
-      }));
+      let list = snapshot.docs
+        .map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<TrajectorySegment, "id">),
+        }))
+        .filter((s) => !s.simulated); // records from old simulation runs are never shown
       if (options.sensorType) {
         list = list.filter((s) => s.sensor_type === options.sensorType);
       }
@@ -1310,11 +980,11 @@ export const firebaseDb = {
       if (options.toIso) {
         list = list.filter((s) => s.start_time <= options.toIso!);
       }
-      if (list.length === 0) return fallback();
       return list;
     } catch (err) {
-      logFirestoreWarning("Get trajectory segments fallback", err);
-      return fallback();
+      logFirestoreWarning("Get trajectory segments", err);
+      // Local cache only inside the test runner; the app never substitutes local data for Firestore.
+      return IS_TEST ? fallback() : [];
     }
   },
 

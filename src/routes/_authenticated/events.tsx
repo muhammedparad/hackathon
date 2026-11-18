@@ -16,8 +16,9 @@ import {
 } from "lucide-react";
 import { eventsQuery, fetchEvents, roomsQuery, type EventFilters } from "@/lib/data";
 import { EVENT_LABELS, EVENT_TYPES, type AlertSeverity, type EventType } from "@/lib/radar/types";
+import { authClient } from "@/lib/auth";
 import { firebaseDb, type OccupancyEvent } from "@/lib/firebase/db";
-import { Empty, PageHeader, Panel, SimTag } from "@/components/app/status";
+import { Empty, PageHeader, Panel } from "@/components/app/status";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -95,7 +96,6 @@ function EventsPage() {
   const [severity, setSeverity] = useState("all");
   const [sensor, setSensor] = useState("all");
   const [ackFilter, setAckFilter] = useState("all");
-  const [sim, setSim] = useState(true);
   const [page, setPage] = useState(0);
 
   // Evidence modal state
@@ -109,7 +109,6 @@ function EventsPage() {
     severity: severity === "all" ? undefined : (severity as AlertSeverity),
     sensorType: sensor === "all" ? undefined : sensor,
     acknowledged: ackFilter === "all" ? undefined : ackFilter === "ack",
-    includeSimulated: sim,
     page,
     pageSize: PAGE,
   };
@@ -131,8 +130,7 @@ function EventsPage() {
       await firebaseDb.acknowledgeEvent({
         eventId: e.id,
         roomId: e.room_id,
-        simulated: e.simulated ?? true,
-        userId: "user",
+        userId: (await authClient.getUser())?.id ?? "",
       });
       toast.success("Alert acknowledged");
       qc.invalidateQueries({ queryKey: ["events"] });
@@ -161,7 +159,7 @@ function EventsPage() {
     }
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const csv = [
-      "timestamp,room,event,severity,sensor,target_id,zone,details,evidence_quality,confidence,acknowledged,source",
+      "timestamp,room,event,severity,sensor,target_id,zone,details,evidence_quality,confidence,acknowledged",
       ...rows.map((r) =>
         [
           r.timestamp,
@@ -181,7 +179,6 @@ function EventsPage() {
                 : "Screening Heuristic — Experimental"),
           r.confidence != null ? String(r.confidence).toUpperCase() : "",
           r.acknowledged ? "yes" : "no",
-          r.simulated ? "simulated" : "hardware",
         ]
           .map(esc)
           .join(","),
@@ -276,12 +273,6 @@ function EventsPage() {
             <SelectItem value="rd61">RD-61</SelectItem>
           </SelectContent>
         </Select>
-        <div className="ml-auto flex items-center gap-2">
-          <Switch id="sim-e" checked={sim} onCheckedChange={reset(setSim)} />
-          <Label htmlFor="sim-e" className="text-sm">
-            Include simulated
-          </Label>
-        </div>
       </div>
 
       {/* Main events table */}
@@ -294,7 +285,8 @@ function EventsPage() {
           </div>
         ) : !q.data?.rows.length ? (
           <Empty icon={<History className="size-5" />} title="No events match">
-            Try clearing filters, or run the simulation to generate events.
+            Try clearing the filters. Events appear here once a registered device reports to the
+            server.
           </Empty>
         ) : (
           <div className="overflow-x-auto">
@@ -369,7 +361,6 @@ function EventsPage() {
                       >
                         <FileSearch className="size-3" /> Evidence
                       </Button>
-                      {e.simulated && <SimTag />}
                     </td>
                   </tr>
                 ))}
@@ -420,7 +411,6 @@ function EventsPage() {
                   {EVENT_LABELS[selectedEvidenceEvent.event_type as EventType] ??
                     selectedEvidenceEvent.event_type}
                   <SeverityBadge severity={selectedEvidenceEvent.severity} />
-                  {selectedEvidenceEvent.simulated && <SimTag />}
                 </DialogTitle>
               </div>
               <DialogDescription>

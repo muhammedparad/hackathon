@@ -53,8 +53,65 @@ const deviceLastFrame = new Map<string, DedupEntry>();
 // In-memory stateful AlertEngine instances per room (roomId -> entry)
 const roomAlertEngines = new Map<string, RoomEngineEntry>();
 
+/** A device that sends nothing for this long is offline; when it returns, the silence is recorded as a data gap. */
+export const DATA_GAP_MS = 60_000;
+
+// When each device last got a frame or heartbeat through (epoch ms)
+const lastCallAt = new Map<string, number>();
+
+export interface DataGap {
+  from: number;
+  to: number;
+}
+
+/**
+ * Call for every authenticated frame or heartbeat. Returns the silence that just ended, if the device had been
+ * quiet for DATA_GAP_MS or more. The first call after a server restart compares with the stored last_seen, so
+ * time the server itself was down counts as a gap too: nothing was recorded then.
+ */
+export function noteDeviceCall(device: AuthenticatedDevice, nowMs: number): DataGap | null {
+  const stored = device.last_seen ? Date.parse(device.last_seen) : NaN;
+  const prev = lastCallAt.get(device.id) ?? (Number.isFinite(stored) ? stored : null);
+  lastCallAt.set(device.id, nowMs);
+  if (prev === null) return null;
+  return nowMs - prev >= DATA_GAP_MS ? { from: prev, to: nowMs } : null;
+}
+
+function formatGap(ms: number): string {
+  const min = Math.round(ms / 60_000);
+  if (min < 60) return `${Math.max(1, min)} min`;
+  const h = Math.floor(min / 60);
+  return `${h} h ${min % 60} min`;
+}
+
+/** Stores "no data from <from> to <to>" so Playback can show the outage instead of an empty room. */
+export async function recordDataGap(
+  db: Firestore,
+  device: AuthenticatedDevice,
+  gap: DataGap,
+): Promise<void> {
+  if (!device.room_id) return;
+  const fromIso = new Date(gap.from).toISOString();
+  const toIso = new Date(gap.to).toISOString();
+  await db.collection("occupancy_events").add({
+    room_id: device.room_id,
+    device_id: device.id,
+    event_type: "data_gap",
+    severity: "low",
+    description: `No data for ${formatGap(gap.to - gap.from)}: ${device.device_name} was offline or unreachable`,
+    simulated: false,
+    timestamp: toIso,
+    gap_started_at: fromIso,
+    gap_ended_at: toIso,
+    acknowledged: false,
+    acknowledged_at: null,
+    acknowledged_by: null,
+  });
+}
+
 /** Testing / maintenance hook to clear in-memory caches */
 export function _resetTelemetryCache() {
+  lastCallAt.clear();
   lastOccupancyState.clear();
   deviceLastFrame.clear();
   roomAlertEngines.clear();
@@ -266,6 +323,7 @@ export async function processTelemetry(
 ): Promise<Response> {
   const receivedAtMs = opts.receivedAtMs ?? Date.now();
   const receivedAtIso = new Date(receivedAtMs).toISOString();
+  const dataGap = noteDeviceCall(device, receivedAtMs);
 
   const { captureTimestampIso, isDeviceTimeSynced, effectiveTimestamp } = resolveTelemetryTimestamp(
     payload,
@@ -299,6 +357,7 @@ export async function processTelemetry(
 
   try {
     if (db) {
+      if (dataGap) await recordDataGap(db, device, dataGap);
       // Write to telemetry collection with explicit capture vs reception timestamps
       const telRef = await db.collection("telemetry").add({
         device_id: device.id,
@@ -567,8 +626,10 @@ export async function processHeartbeat(
   body: HeartbeatBody,
   opts: { publish?: boolean } = {},
 ): Promise<Response> {
-  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   const wasOffline = device.status !== "connected";
+  const dataGap = noteDeviceCall(device, nowMs);
 
   // Tell the owner's browsers this device just made an authenticated call (live WebSocket).
   if (opts.publish !== false) publishDeviceSeen(device, nowIso, body.sensor_status);
@@ -576,6 +637,7 @@ export async function processHeartbeat(
   const db = getAdminFirestore();
   if (db) {
     try {
+      if (dataGap) await recordDataGap(db, device, dataGap);
       await db
         .collection("devices")
         .doc(device.id)

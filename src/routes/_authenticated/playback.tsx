@@ -8,6 +8,7 @@ import {
   Calendar,
   Clock,
   FastForward,
+  WifiOff,
   Pause,
   Play,
   RotateCcw,
@@ -16,7 +17,8 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { roomsQuery, type Room } from "@/lib/data";
+import { devicesQuery, roomsQuery, type Room } from "@/lib/data";
+import { buildCoverageGaps, gapLabel, type CoverageGap } from "@/lib/radar/coverage";
 import { firebaseDb, type OccupancyEvent } from "@/lib/firebase/db";
 import { EVENT_LABELS, type AlertSeverity, type EventType } from "@/lib/radar/types";
 import { interpolateTargetsAtTime, type InterpolatedFrame } from "@/lib/radar/playback-engine";
@@ -170,13 +172,36 @@ function PlaybackPage() {
     }
   }, [rooms, selectedRoomId]);
 
+  // Periods with NO DATA (device or sensor offline). They count as time on the timeline but are marked, never
+  // shown as an empty room.
+  const { data: devices = [] } = useQuery(devicesQuery);
+  const gaps: CoverageGap[] = useMemo(() => {
+    const windowStart = fromIso ? Date.parse(fromIso) : NaN;
+    const windowEnd = toIso ? Date.parse(toIso) : NaN;
+    if (!Number.isFinite(windowStart) || !Number.isFinite(windowEnd) || !currentRoom) return [];
+    const lastSeen = devices
+      .filter((d) => d.room_id === currentRoom.id && d.last_seen)
+      .map((d) => Date.parse(d.last_seen as string))
+      .filter((t) => Number.isFinite(t));
+    return buildCoverageGaps(events, {
+      windowStart,
+      windowEnd,
+      nowMs: Date.now(),
+      lastSeenMs: lastSeen.length > 0 ? Math.max(...lastSeen) : null,
+    });
+  }, [events, devices, currentRoom, fromIso, toIso]);
+
   // Calculate timeline start and end
   const { startTime, endTime, totalDurationMs } = useMemo(() => {
-    if (segments.length === 0 && events.length === 0) {
+    if (segments.length === 0 && events.length === 0 && gaps.length === 0) {
       return { startTime: 0, endTime: 0, totalDurationMs: 0 };
     }
     let min = Infinity;
     let max = -Infinity;
+    for (const g of gaps) {
+      if (g.from < min) min = g.from;
+      if (g.to > max) max = g.to;
+    }
     for (const s of segments) {
       if (s.start_epoch < min) min = s.start_epoch;
       if (s.end_epoch > max) max = s.end_epoch;
@@ -190,7 +215,7 @@ function PlaybackPage() {
       endTime: max,
       totalDurationMs: Math.max(0, max - min),
     };
-  }, [segments, events]);
+  }, [segments, events, gaps]);
 
   // Load trajectory segments from Firestore / cache
   const loadTrajectories = useCallback(async () => {
@@ -245,12 +270,18 @@ function PlaybackPage() {
   }, [loadTrajectories]);
 
   // Interpolated targets at currentTime
+  const currentGap = useMemo(
+    () => gaps.find((g) => currentTime >= g.from && currentTime < g.to) ?? null,
+    [gaps, currentTime],
+  );
+
   const interpolatedFrame: InterpolatedFrame = useMemo(() => {
-    if (!currentTime || segments.length === 0 || !currentRoom) {
+    // Inside a no-data period nothing is known, so no targets are drawn
+    if (!currentTime || segments.length === 0 || !currentRoom || currentGap) {
       return { timestamp: currentTime, targets: [], activeCount: 0 };
     }
     return interpolateTargetsAtTime(segments, currentTime, currentRoom.zones ?? [], 8000);
-  }, [segments, currentTime, currentRoom]);
+  }, [segments, currentTime, currentRoom, currentGap]);
 
   // Animation frame loop for smooth, stable playback
   const lastWallClockRef = useRef<number>(performance.now());
@@ -312,14 +343,17 @@ function PlaybackPage() {
     setCurrentTime(startTime);
   };
 
+  // Outages are drawn as bands, not as single-moment markers
+  const visibleEvents = useMemo(() => events.filter((e) => e.event_type !== "data_gap"), [events]);
+
   const currentEvent = useMemo(() => {
     let best: (typeof events)[number] | null = null;
-    for (const e of events) {
+    for (const e of visibleEvents) {
       const d = Math.abs(e.epoch - currentTime);
       if (d <= EVENT_NOW_WINDOW_MS && (!best || d < Math.abs(best.epoch - currentTime))) best = e;
     }
     return best;
-  }, [events, currentTime]);
+  }, [visibleEvents, currentTime]);
 
   const selectedTarget = useMemo(() => {
     return interpolatedFrame.targets.find((t) => t.target_id === selectedTargetId);
@@ -419,83 +453,301 @@ function PlaybackPage() {
 
       {/* MAIN PLAYBACK DISPLAY & INSPECTOR */}
       <div className="grid gap-6 xl:grid-cols-[1fr_340px]">
-        {/* Main Floor Plan Map */}
-        <Panel
-          title={<span className="flex items-center gap-2">Route scrubber map</span>}
-          subtitle="Top-down visual route playback with trails, zone collision, and dwell tracking"
-          action={
-            <Pill t={interpolatedFrame.activeCount > 0 ? "success" : "neutral"}>
-              {interpolatedFrame.activeCount} target{interpolatedFrame.activeCount === 1 ? "" : "s"}{" "}
-              tracked
-            </Pill>
-          }
-        >
-          {currentRoom ? (
-            <div className="relative">
-              <LD2450View
-                widthMm={currentRoom.width_mm}
-                lengthMm={currentRoom.length_mm}
-                playbackTargets={interpolatedFrame.targets}
-                selected={selectedTargetId}
-                onSelect={setSelectedTargetId}
-                doors={currentRoom.doors}
-                zones={currentRoom.zones}
-                objects={currentRoom.objects}
-                showZones={showZones}
-                showObjects={showObjects}
-                showTrails={showTrails}
-              />
+        {/* Map and timeline, one under the other */}
+        <div className="min-w-0 space-y-6">
+          <Panel
+            title={<span className="flex items-center gap-2">Route scrubber map</span>}
+            subtitle="Top-down visual route playback with trails, zone collision, and dwell tracking"
+            action={
+              <Pill t={interpolatedFrame.activeCount > 0 ? "success" : "neutral"}>
+                {interpolatedFrame.activeCount} target
+                {interpolatedFrame.activeCount === 1 ? "" : "s"} tracked
+              </Pill>
+            }
+          >
+            {currentRoom ? (
+              <div className="relative">
+                <LD2450View
+                  widthMm={currentRoom.width_mm}
+                  lengthMm={currentRoom.length_mm}
+                  playbackTargets={interpolatedFrame.targets}
+                  selected={selectedTargetId}
+                  onSelect={setSelectedTargetId}
+                  doors={currentRoom.doors}
+                  zones={currentRoom.zones}
+                  objects={currentRoom.objects}
+                  showZones={showZones}
+                  showObjects={showObjects}
+                  showTrails={showTrails}
+                />
 
-              {/* Timestamp overlay */}
-              <div className="absolute left-3 top-3 flex items-center gap-2 rounded-md bg-card/90 px-2.5 py-1 text-xs font-mono shadow-sm border backdrop-blur">
-                <Clock className="size-3.5 text-muted-foreground" />
-                <span>{formatClockTime(currentTime)}</span>
-                <span className="text-muted-foreground">
-                  ({formatDuration(currentTime - startTime)})
-                </span>
-              </div>
-
-              {currentEvent && (
-                <div
-                  className={`absolute right-3 top-3 flex max-w-[60%] items-center gap-2 rounded-md px-2.5 py-1 text-xs font-medium shadow-sm ${severityClass(currentEvent.severity, currentEvent.event_type)}`}
-                >
-                  <AlertTriangle className="size-3.5 shrink-0" />
-                  <span className="truncate">
-                    {eventLabel(currentEvent)}
-                    {currentEvent.zone_name ? ` · ${currentEvent.zone_name}` : ""}
+                {/* Timestamp overlay */}
+                <div className="absolute left-3 top-3 z-20 flex items-center gap-2 rounded-md bg-card/90 px-2.5 py-1 text-xs font-mono shadow-sm border backdrop-blur">
+                  <Clock className="size-3.5 text-muted-foreground" />
+                  <span>{formatClockTime(currentTime)}</span>
+                  <span className="text-muted-foreground">
+                    ({formatDuration(currentTime - startTime)})
                   </span>
                 </div>
-              )}
 
-              {/* Empty state overlay when no trajectories exist for selected date */}
-              {segments.length === 0 && events.length === 0 && !isLoadingSegments && !loadError && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-card/85 backdrop-blur-xs p-6 text-center rounded-lg border">
-                  <Calendar className="size-8 text-muted-foreground mb-2" />
-                  <p className="font-semibold text-sm">No trajectory records for {selectedDate}</p>
-                  <p className="text-xs text-muted-foreground max-w-sm mt-1">
-                    No radar trajectories were stored for this room on this date.
-                  </p>
+                {/* Sensor online, but nobody in view: say so, so it is not confused with "no data" */}
+                {!currentGap &&
+                  interpolatedFrame.activeCount === 0 &&
+                  (segments.length > 0 || visibleEvents.length > 0) && (
+                    <div className="absolute left-3 top-12 z-20 rounded-md border bg-card/90 px-2 py-0.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur">
+                      Sensor online · nobody in view
+                    </div>
+                  )}
+
+                {/* NO DATA: the sensor or device was offline, so the room state is unknown */}
+                {currentGap && (
+                  <div
+                    role="status"
+                    className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-lg p-6 text-center"
+                    style={{
+                      backgroundColor: "rgba(15, 23, 42, 0.82)",
+                      backgroundImage:
+                        "repeating-linear-gradient(135deg, rgba(255,255,255,0.06) 0 12px, transparent 12px 24px)",
+                    }}
+                  >
+                    <WifiOff className="size-8 text-rose-300" />
+                    <p className="text-lg font-bold tracking-wide text-white">NO DATA</p>
+                    <p className="text-sm font-medium text-rose-200">
+                      {gapLabel(currentGap)}
+                      {currentGap.ongoing ? " (still offline)" : ""}
+                    </p>
+                    <p className="font-mono text-xs text-slate-300">
+                      {formatClockTime(currentGap.from)} – {formatClockTime(currentGap.to)} ·{" "}
+                      {formatDuration(currentGap.to - currentGap.from)}
+                    </p>
+                    <p className="max-w-xs text-xs text-slate-400">
+                      Nothing was recorded here, so it is not known whether anyone was in the room.
+                      The time still counts on the timeline.
+                    </p>
+                  </div>
+                )}
+
+                {currentEvent && (
+                  <div
+                    className={`absolute right-3 top-3 flex max-w-[60%] items-center gap-2 rounded-md px-2.5 py-1 text-xs font-medium shadow-sm ${severityClass(currentEvent.severity, currentEvent.event_type)}`}
+                  >
+                    <AlertTriangle className="size-3.5 shrink-0" />
+                    <span className="truncate">
+                      {eventLabel(currentEvent)}
+                      {currentEvent.zone_name ? ` · ${currentEvent.zone_name}` : ""}
+                    </span>
+                  </div>
+                )}
+
+                {/* Empty state overlay when no trajectories exist for selected date */}
+                {segments.length === 0 &&
+                  events.length === 0 &&
+                  gaps.length === 0 &&
+                  !isLoadingSegments &&
+                  !loadError && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-card/85 backdrop-blur-xs p-6 text-center rounded-lg border">
+                      <Calendar className="size-8 text-muted-foreground mb-2" />
+                      <p className="font-semibold text-sm">
+                        No trajectory records for {selectedDate}
+                      </p>
+                      <p className="text-xs text-muted-foreground max-w-sm mt-1">
+                        No radar trajectories were stored for this room on this date.
+                      </p>
+                    </div>
+                  )}
+              </div>
+            ) : (
+              <Empty icon={<Calendar className="size-5" />} title="No Room Selected" />
+            )}
+          </Panel>
+
+          {/* TIMELINE SCRUBBER & PLAYBACK CONTROLS */}
+          <div className="rounded-xl border bg-card p-5 shadow-card space-y-3">
+            {/* Scrubber Slider */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span className="font-mono">{formatClockTime(currentTime)}</span>
+                <span className="text-[11px] font-medium">
+                  Progress: {scrubberProgress.toFixed(1)}% · Elapsed:{" "}
+                  {formatDuration(currentTime - startTime)} / Total:{" "}
+                  {formatDuration(totalDurationMs)}
+                </span>
+                <span className="font-mono">{formatClockTime(endTime)}</span>
+              </div>
+
+              <Slider
+                value={[currentTime]}
+                min={startTime || 0}
+                max={endTime || 100}
+                step={250}
+                onValueChange={(val) => {
+                  if (val[0] !== undefined) {
+                    setCurrentTime(val[0]);
+                  }
+                }}
+                disabled={segments.length === 0 && events.length === 0 && gaps.length === 0}
+                className="cursor-pointer"
+              />
+              {gaps.length > 0 && totalDurationMs > 0 && (
+                <div
+                  className="relative h-3 overflow-hidden rounded bg-muted/50"
+                  aria-label="No-data periods"
+                >
+                  {gaps.map((g) => (
+                    <button
+                      key={`${g.from}-${g.to}`}
+                      type="button"
+                      title={`${gapLabel(g)} · ${formatClockTime(g.from)} – ${formatClockTime(g.to)} (${formatDuration(g.to - g.from)})`}
+                      onClick={() => {
+                        setIsPlaying(false);
+                        setCurrentTime(g.from);
+                      }}
+                      style={{
+                        left: `${((g.from - startTime) / totalDurationMs) * 100}%`,
+                        width: `${Math.max(0.4, ((g.to - g.from) / totalDurationMs) * 100)}%`,
+                        backgroundImage:
+                          "repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 3px, transparent 3px 6px)",
+                      }}
+                      className="absolute inset-y-0 bg-rose-500"
+                    />
+                  ))}
+                </div>
+              )}
+              {visibleEvents.length > 0 && totalDurationMs > 0 && (
+                <div className="relative h-4" aria-label="Event markers">
+                  {visibleEvents.map((e) => (
+                    <button
+                      key={e.id}
+                      type="button"
+                      title={`${formatClockTime(e.epoch)} · ${eventLabel(e)}${e.description ? ` — ${e.description}` : ""}`}
+                      onClick={() => {
+                        setIsPlaying(false);
+                        setCurrentTime(Math.max(startTime, e.epoch - 2000));
+                      }}
+                      style={{ left: `${((e.epoch - startTime) / totalDurationMs) * 100}%` }}
+                      className={`absolute top-0.5 size-3 -translate-x-1/2 rounded-full ring-2 ring-card ${severityClass(e.severity, e.event_type)}`}
+                    />
+                  ))}
                 </div>
               )}
             </div>
-          ) : (
-            <Empty icon={<Calendar className="size-5" />} title="No Room Selected" />
-          )}
-        </Panel>
+
+            {/* Playback Button Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+              {/* Main Transport Buttons */}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 w-9 p-0"
+                  onClick={resetPlayback}
+                  title="Reset to start"
+                >
+                  <RotateCcw className="size-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 w-9 p-0"
+                  onClick={() => seekRelative(-5000)}
+                  title="Step backward 5s"
+                >
+                  <SkipBack className="size-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-9 w-24 gap-1.5 font-medium"
+                  onClick={() => {
+                    if (currentTime >= endTime && endTime > 0) {
+                      setCurrentTime(startTime);
+                    }
+                    setIsPlaying(!isPlaying);
+                  }}
+                  disabled={segments.length === 0 && events.length === 0 && gaps.length === 0}
+                >
+                  {isPlaying ? (
+                    <>
+                      <Pause className="size-4" /> Pause
+                    </>
+                  ) : (
+                    <>
+                      <Play className="size-4" /> Play
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 w-9 p-0"
+                  onClick={() => seekRelative(5000)}
+                  title="Step forward 5s"
+                >
+                  <SkipForward className="size-4" />
+                </Button>
+              </div>
+
+              {/* Playback Speed Multipliers: 1x, 2x, 4x, 10x */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-muted-foreground mr-1">Speed:</span>
+                {[1, 2, 4, 10].map((s) => (
+                  <Button
+                    key={s}
+                    variant={speed === s ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 px-2.5 text-xs font-mono"
+                    onClick={() => setSpeed(s)}
+                  >
+                    {s}x
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* Side Inspector Panel */}
         <div className="space-y-6">
           <Panel
             title="Events"
             subtitle={
-              events.length === 0
+              visibleEvents.length === 0 && gaps.length === 0
                 ? "Nothing was recorded for this day"
-                : `${events.length} on this day · click to jump`
+                : `${visibleEvents.length} on this day · click to jump`
             }
           >
-            {events.length > 0 ? (
+            {gaps.length > 0 && (
+              <div className="mb-3 space-y-1.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-600">
+                  No data
+                </p>
+                {gaps.map((g) => (
+                  <button
+                    key={`${g.from}-${g.to}`}
+                    type="button"
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setCurrentTime(g.from);
+                    }}
+                    className="flex w-full items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-2 text-left text-xs hover:bg-rose-100"
+                  >
+                    <WifiOff className="mt-0.5 size-3.5 shrink-0 text-rose-600" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-medium text-rose-900">
+                        {gapLabel(g)}
+                        {g.ongoing ? " · still offline" : ""}
+                      </span>
+                      <span className="block font-mono text-rose-700">
+                        {formatClockTime(g.from)} – {formatClockTime(g.to)} ·{" "}
+                        {formatDuration(g.to - g.from)}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {visibleEvents.length > 0 ? (
               <ul className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
-                {events.map((e) => (
+                {visibleEvents.map((e) => (
                   <li key={e.id}>
                     <button
                       type="button"
@@ -637,123 +889,6 @@ function PlaybackPage() {
               </p>
             )}
           </Panel>
-        </div>
-      </div>
-
-      {/* TIMELINE SCRUBBER & PLAYBACK CONTROLS */}
-      <div className="rounded-xl border bg-card p-5 shadow-card space-y-3">
-        {/* Scrubber Slider */}
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-mono">{formatClockTime(currentTime)}</span>
-            <span className="text-[11px] font-medium">
-              Progress: {scrubberProgress.toFixed(1)}% · Elapsed:{" "}
-              {formatDuration(currentTime - startTime)} / Total: {formatDuration(totalDurationMs)}
-            </span>
-            <span className="font-mono">{formatClockTime(endTime)}</span>
-          </div>
-
-          <Slider
-            value={[currentTime]}
-            min={startTime || 0}
-            max={endTime || 100}
-            step={250}
-            onValueChange={(val) => {
-              if (val[0] !== undefined) {
-                setCurrentTime(val[0]);
-              }
-            }}
-            disabled={segments.length === 0 && events.length === 0}
-            className="cursor-pointer"
-          />
-          {events.length > 0 && totalDurationMs > 0 && (
-            <div className="relative h-4" aria-label="Event markers">
-              {events.map((e) => (
-                <button
-                  key={e.id}
-                  type="button"
-                  title={`${formatClockTime(e.epoch)} · ${eventLabel(e)}${e.description ? ` — ${e.description}` : ""}`}
-                  onClick={() => {
-                    setIsPlaying(false);
-                    setCurrentTime(Math.max(startTime, e.epoch - 2000));
-                  }}
-                  style={{ left: `${((e.epoch - startTime) / totalDurationMs) * 100}%` }}
-                  className={`absolute top-0.5 size-3 -translate-x-1/2 rounded-full ring-2 ring-card ${severityClass(e.severity, e.event_type)}`}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Playback Button Controls */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-          {/* Main Transport Buttons */}
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 w-9 p-0"
-              onClick={resetPlayback}
-              title="Reset to start"
-            >
-              <RotateCcw className="size-4" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 w-9 p-0"
-              onClick={() => seekRelative(-5000)}
-              title="Step backward 5s"
-            >
-              <SkipBack className="size-4" />
-            </Button>
-            <Button
-              size="sm"
-              className="h-9 w-24 gap-1.5 font-medium"
-              onClick={() => {
-                if (currentTime >= endTime && endTime > 0) {
-                  setCurrentTime(startTime);
-                }
-                setIsPlaying(!isPlaying);
-              }}
-              disabled={segments.length === 0 && events.length === 0}
-            >
-              {isPlaying ? (
-                <>
-                  <Pause className="size-4" /> Pause
-                </>
-              ) : (
-                <>
-                  <Play className="size-4" /> Play
-                </>
-              )}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9 w-9 p-0"
-              onClick={() => seekRelative(5000)}
-              title="Step forward 5s"
-            >
-              <SkipForward className="size-4" />
-            </Button>
-          </div>
-
-          {/* Playback Speed Multipliers: 1x, 2x, 4x, 10x */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground mr-1">Speed:</span>
-            {[1, 2, 4, 10].map((s) => (
-              <Button
-                key={s}
-                variant={speed === s ? "default" : "outline"}
-                size="sm"
-                className="h-8 px-2.5 text-xs font-mono"
-                onClick={() => setSpeed(s)}
-              >
-                {s}x
-              </Button>
-            ))}
-          </div>
         </div>
       </div>
     </div>

@@ -99,6 +99,9 @@ export interface OccupancyEvent {
   acknowledged?: boolean | undefined;
   acknowledged_at?: string | null | undefined;
   acknowledged_by?: string | null | undefined;
+  /** data_gap events: the period during which the device sent nothing (ISO 8601) */
+  gap_started_at?: string | null | undefined;
+  gap_ended_at?: string | null | undefined;
 }
 
 export interface TelemetryRecord {

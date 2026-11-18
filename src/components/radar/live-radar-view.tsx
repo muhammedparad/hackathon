@@ -1,11 +1,24 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { Activity, Bed, Crosshair, Pause, Play, Settings, User, UserRound } from "lucide-react";
+import {
+  Activity,
+  Bed,
+  Crosshair,
+  Moon,
+  Pause,
+  Play,
+  Settings,
+  Sun,
+  User,
+  UserRound,
+} from "lucide-react";
 import type { Radar3DProps } from "@/components/radar/radar-3d";
 import { RadarStage } from "@/components/radar/radar-stage";
 import { DemoVitalsCard } from "@/components/radar/demo-vitals-card";
 import { AreaSeries } from "@/components/app/charts";
 import { targetColor, targetLabel } from "@/lib/radar/palette";
+import { StillTracker } from "@/lib/radar/vitals-demo";
+import { targetState } from "@/lib/radar/target-state";
 import type { LD2450Target } from "@/lib/radar/types";
 import { cn } from "@/lib/utils";
 
@@ -60,6 +73,9 @@ const SERIES: Array<{ id: "targets" | "nearest" | "speed"; label: string; unit?:
 
 export function LiveRadarView(p: LiveRadarViewProps) {
   const [metric, setMetric] = useState<(typeof SERIES)[number]["id"]>("targets");
+  // Awake or sleeping: sleeping only when still at the bed for a couple of minutes
+  const stillTracker = useRef(new StillTracker());
+  const stillMs = useMemo(() => stillTracker.current.update(p.targets, p.now), [p.targets, p.now]);
 
   const pill = PILL[p.status];
   const nearest = p.targets.length
@@ -178,7 +194,8 @@ export function LiveRadarView(p: LiveRadarViewProps) {
             ) : (
               <ul className="mt-3 space-y-2">
                 {p.targets.map((t) => {
-                  const moving = t.speed_cms !== 0;
+                  const state = targetState(p.room, t, stillMs.get(t.target_id) ?? 0);
+                  const sleeping = state === "sleeping";
                   const sel = p.selectedId === t.target_id;
                   return (
                     <li key={t.target_id}>
@@ -215,10 +232,17 @@ export function LiveRadarView(p: LiveRadarViewProps) {
                         <span
                           className={cn(
                             "rounded-full px-2.5 py-1 text-[11px] font-semibold",
-                            moving ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700",
+                            sleeping
+                              ? "bg-indigo-50 text-indigo-700"
+                              : "bg-emerald-50 text-emerald-700",
                           )}
                         >
-                          {moving ? "Moving" : "Stationary"}
+                          {sleeping ? (
+                            <Moon className="mr-1 inline size-3 align-[-1px]" />
+                          ) : (
+                            <Sun className="mr-1 inline size-3 align-[-1px]" />
+                          )}
+                          {sleeping ? "Sleeping" : "Awake"}
                         </span>
                       </button>
                     </li>

@@ -1,11 +1,12 @@
 # Render Blueprint for RoomTrace (always-on Node server).
-# Use a PAID instance type: the free tier sleeps after ~15 min without traffic, which would
-# drop device telemetry. Check current Render pricing before choosing the plan.
+# Free plan for first tests. The free tier sleeps after ~15 min without traffic: the first request
+# after that is slow, the ESP32 drops frames until the service is awake, and WebSockets reconnect.
+# For always-on use, change `plan` to a paid one (e.g. starter). Check current Render pricing.
 services:
   - type: web
     name: roomtrace
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install --no-audit --no-fund && npm run build
     startCommand: node .output/server/index.mjs
     healthCheckPath: /

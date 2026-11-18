@@ -1,8 +1,9 @@
 # Deploying RoomTrace on Render
 
-RoomTrace runs as an **always-on Node web service** on Render. Always-on matters: the ESP32 posts
-telemetry continuously, and Render's free tier sleeps after about 15 minutes without traffic, which
-would drop device data. Check current Render pricing before choosing a plan.
+RoomTrace runs as a **Node web service** on Render. `render.yaml` uses the **free** plan for first tests.
+The free tier sleeps after about 15 minutes without traffic: the first request afterwards is slow, the
+ESP32 drops frames until the service is awake, and WebSockets reconnect. For always-on use, change
+`plan` in `render.yaml` (or the instance type in Render) to a paid one. Check current Render pricing.
 
 ## 1. Firebase side
 1. Firebase Console > Project settings > **Service accounts** > *Generate new private key*. Keep the JSON secret.
@@ -17,7 +18,7 @@ Create a **Blueprint** from this repo (it reads `render.yaml`) or a Web Service 
 | Runtime | Node 22 |
 | Build command | `npm install --no-audit --no-fund && npm run build` |
 | Start command | `node .output/server/index.mjs` |
-| Instance | paid, always-on |
+| Instance | free for tests (sleeps when idle); paid for always-on |
 
 `RENDER=true` is set by Render automatically; `vite.config.ts` then builds the Nitro `node-server` preset
 and keeps `firebase-admin` out of the bundle (it is loaded from `node_modules` at runtime).

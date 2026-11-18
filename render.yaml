@@ -1,0 +1,39 @@
+# Render Blueprint for RoomTrace (always-on Node server).
+# Use a PAID instance type: the free tier sleeps after ~15 min without traffic, which would
+# drop device telemetry. Check current Render pricing before choosing the plan.
+services:
+  - type: web
+    name: roomtrace
+    runtime: node
+    plan: starter
+    buildCommand: npm install --no-audit --no-fund && npm run build
+    startCommand: node .output/server/index.mjs
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # RENDER=true is set by Render itself; vite.config.ts then builds the Nitro "node-server" preset.
+      - key: VITE_AUTH_PROVIDER
+        value: firebase
+      # Client Firebase config (public values from Firebase Console > Project settings > Your apps).
+      # These are baked into the browser bundle at build time, so set them before the first deploy.
+      - key: VITE_FIREBASE_API_KEY
+        sync: false
+      - key: VITE_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: VITE_FIREBASE_PROJECT_ID
+        sync: false
+      - key: VITE_FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: VITE_FIREBASE_APP_ID
+        sync: false
+      - key: VITE_FIREBASE_DATABASE_URL
+        sync: false
+      # Server-only secrets (never VITE_-prefixed). Paste the whole service-account JSON as one value.
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_KEY
+        sync: false
+      # Do NOT set ROOMTRACE_ALLOW_DEMO_DEVICES in production.

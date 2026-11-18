@@ -7,7 +7,8 @@ services:
     name: roomtrace
     runtime: node
     plan: free
-    buildCommand: npm install --no-audit --no-fund && npm run build
+    # Use the committed lockfile so Render never needs to resolve the dependency tree.
+    buildCommand: npm ci --no-audit --no-fund && npm run build
     startCommand: node .output/server/index.mjs
     healthCheckPath: /
     envVars:

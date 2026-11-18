@@ -1,5 +1,6 @@
 import {
   getFirestore,
+  initializeFirestore,
   collection,
   getDocs,
   getDoc,
@@ -346,12 +347,39 @@ export function getFirestoreDb(): Firestore | null {
   const app = getFirebaseApp();
   if (!app) return null;
   try {
-    firestoreInstance = getFirestore(app);
+    try {
+      // Skip undefined fields instead of failing the whole write ("Unsupported field value: undefined").
+      firestoreInstance = initializeFirestore(app, { ignoreUndefinedProperties: true });
+    } catch {
+      firestoreInstance = getFirestore(app); // already initialised elsewhere
+    }
     return firestoreInstance;
   } catch (err) {
     console.warn("[Firebase] Firestore initialization error:", err);
     return null;
   }
+}
+
+/**
+ * Removes `undefined` values (deeply) so a document can be written to Firestore, which rejects them.
+ * Plain objects and arrays are walked; everything else is kept as is.
+ */
+export function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.filter((v) => v !== undefined).map((v) => stripUndefined(v)) as unknown as T;
+  }
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) out[k] = stripUndefined(v);
+    }
+    return out as T;
+  }
+  return value;
 }
 
 export const firebaseDb = {
@@ -424,26 +452,25 @@ export const firebaseDb = {
     const db = getFirestoreDb();
     if (!db) throw new Error("Firebase is not initialized");
     const col = collection(db, "rooms");
-    const docRef = await addDoc(col, {
-      ...room,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    const docRef = await addDoc(
+      col,
+      stripUndefined({
+        ...room,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }),
+    );
     return docRef.id;
   },
 
   async updateRoom(roomId: string, updates: Partial<Room>): Promise<void> {
     const db = getFirestoreDb();
-    if (!db) return;
-    try {
-      const ref = doc(db, "rooms", roomId);
-      await updateDoc(ref, {
-        ...updates,
-        updated_at: new Date().toISOString(),
-      });
-    } catch (err) {
-      logFirestoreWarning("Update room fallback", err);
-    }
+    if (!db) throw new Error("Firebase is not initialized");
+    // Errors propagate so the page never says "saved" when the write failed.
+    await updateDoc(
+      doc(db, "rooms", roomId),
+      stripUndefined({ ...updates, updated_at: new Date().toISOString() }),
+    );
   },
 
   /* ---------------- Room Zones ---------------- */

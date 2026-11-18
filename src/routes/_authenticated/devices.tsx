@@ -585,7 +585,7 @@ function SecretDialog({
           <div className="mb-1.5 text-xs font-medium text-muted-foreground">
             Example telemetry request
           </div>
-          <pre className="overflow-auto rounded-lg bg-foreground p-3 text-[11px] leading-relaxed text-background">
+          <pre className="max-w-full overflow-x-auto rounded-lg bg-foreground p-3 text-[11px] leading-relaxed text-background">
             {curl}
           </pre>
         </div>
